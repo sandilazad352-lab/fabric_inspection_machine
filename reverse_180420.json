@@ -1,0 +1,65 @@
+{
+  "document_type": "Inspection Record Form",
+  "date": null,
+  "batch_number": null,
+  "length": null,
+  "supplier": null,
+  "defect_rows": [
+    {
+      "left_label": "shadb4",
+      "left_value": 12,
+      "right_label": "missy4",
+      "right_value": 18
+    },
+    {
+      "left_label": "Thik4",
+      "left_value": 13,
+      "right_label": "missl",
+      "right_value": 11
+    },
+    {
+      "left_label": "Knot's",
+      "left_value": 10,
+      "right_label": "dyein4",
+      "right_value": 7
+    },
+    {
+      "left_label": "Creas4",
+      "left_value": 6,
+      "right_label": "PRINT1",
+      "right_value": 8
+    },
+    {
+      "left_label": "spotlm",
+      "left_value": 13,
+      "right_label": "holep",
+      "right_value": 8
+    },
+    {
+      "left_label": "spot4",
+      "left_value": 12,
+      "right_label": "Joint4",
+      "right_value": 14
+    }
+  ],
+  "defects": {
+    "shadb4": 12,
+    "missy4": 18,
+    "Thik4": 13,
+    "missl": 11,
+    "Knot's": 10,
+    "dyein4": 7,
+    "Creas4": 6,
+    "PRINT1": 8,
+    "spotlm": 13,
+    "holep": 8,
+    "spot4": 12,
+    "Joint4": 14
+  },
+  "source_file": "HMI_CAPTURE_20260411_180420.hex",
+  "image_size": [
+    240,
+    320
+  ],
+  "engine": "calibrated_reverse_no_ocr_cell_matching"
+}
