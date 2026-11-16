@@ -1,0 +1,834 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>FI-GW // Industrial RS-232 MQTT Gateway</title>
+<style>
+:root{
+  --bg:#090d13;--bg2:#0f151f;--panel:#131b27;--panel2:#182231;--border:#233146;--border2:#2f425e;
+  --text:#e6edf7;--muted:#8b9bb4;--dim:#5a6b84;--accent:#38bdf8;--accent2:#0284c7;
+  --ok:#10b981;--warn:#f59e0b;--err:#ef4444;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14px;line-height:1.45}
+button,input,select,textarea{font-family:inherit;font-size:inherit;color:inherit}
+.hidden{display:none!important}
+.mono{font-family:var(--mono)}
+.muted{color:var(--muted)}
+.small{font-size:12px}
+
+/* Auth Gate */
+.auth-wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;background:radial-gradient(circle at 20% 20%,#122238 0%,#090d13 55%)}
+.auth-card{width:100%;max-width:410px;background:var(--panel);border:1px solid var(--border2);border-radius:10px;padding:28px;box-shadow:0 24px 60px rgba(0,0,0,.55)}
+.brand-row{display:flex;align-items:center;gap:12px;margin-bottom:20px}
+.brand-mark{width:38px;height:38px;border-radius:8px;background:linear-gradient(135deg,#0ea5e9,#0369a1);display:grid;place-items:center;font-weight:700;font-family:var(--mono);letter-spacing:-.5px;color:#fff;flex-shrink:0}
+.brand-title{font-weight:700;font-size:16px;letter-spacing:.2px}
+.brand-sub{font-size:12px;color:var(--muted);font-family:var(--mono)}
+.field{margin-bottom:14px}
+.field label{display:block;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);margin-bottom:6px}
+.input,select{width:100%;background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:9px 11px;outline:none;transition:border-color .15s}
+.input:focus,select:focus{border-color:var(--accent)}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;padding:9px 14px;border-radius:6px;border:1px solid var(--border2);background:var(--panel2);color:var(--text);font-weight:600;font-size:13px;cursor:pointer;transition:all .15s;white-space:nowrap}
+.btn:hover{border-color:var(--accent);background:#1c283a}
+.btn-primary{background:var(--accent2);border-color:var(--accent);color:#fff}
+.btn-primary:hover{background:#0369a1}
+.btn-danger{background:rgba(239,68,68,.12);border-color:rgba(239,68,68,.45);color:#fca5a5}
+.btn-danger:hover{background:rgba(239,68,68,.25)}
+.btn-sm{padding:6px 10px;font-size:12px}
+.alert{padding:9px 12px;border-radius:6px;font-size:12.5px;margin-bottom:12px;border:1px solid transparent}
+.alert-err{background:rgba(239,68,68,.12);border-color:rgba(239,68,68,.4);color:#fca5a5}
+.alert-ok{background:rgba(16,185,129,.12);border-color:rgba(16,185,129,.4);color:#6ee7b7}
+
+/* Shell Layout */
+.shell{display:grid;grid-template-columns:238px 1fr;min-height:100vh}
+.sidebar{background:var(--bg2);border-right:1px solid var(--border);display:flex;flex-direction:column;padding:18px 12px}
+.nav{display:flex;flex-direction:column;gap:4px;margin-top:8px;flex:1}
+.nav-btn{display:flex;align-items:center;gap:10px;width:100%;padding:9px 12px;border-radius:6px;background:transparent;border:1px solid transparent;color:var(--muted);font-weight:500;cursor:pointer;text-align:left;transition:all .12s}
+.nav-btn:hover{background:rgba(255,255,255,.04);color:var(--text)}
+.nav-btn.active{background:rgba(56,189,248,.11);border-color:rgba(56,189,248,.35);color:var(--accent)}
+.nav-btn svg{width:16px;height:16px;flex-shrink:0;opacity:.85}
+.sidebar-foot{border-top:1px solid var(--border);padding-top:12px;margin-top:12px;display:flex;flex-direction:column;gap:8px}
+
+.main{display:flex;flex-direction:column;min-width:0}
+.topbar{height:56px;border-bottom:1px solid var(--border);background:var(--bg2);display:flex;align-items:center;justify-content:space-between;padding:0 22px;gap:12px}
+.topbar-left{display:flex;align-items:center;gap:12px;min-width:0}
+.page-title{font-weight:700;font-size:15px}
+.status-pills{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:4px 9px;border-radius:999px;background:var(--panel);border:1px solid var(--border);font-size:11.5px;font-family:var(--mono);color:var(--muted)}
+.led{width:7px;height:7px;border-radius:50%;background:var(--dim)}
+.led.ok{background:var(--ok);box-shadow:0 0 8px rgba(16,185,129,.7)}
+.led.warn{background:var(--warn);box-shadow:0 0 8px rgba(245,158,11,.6)}
+.led.err{background:var(--err);box-shadow:0 0 8px rgba(239,68,68,.6)}
+
+.content{padding:20px 22px;max-width:1360px;width:100%;margin:0 auto;display:flex;flex-direction:column;gap:18px}
+.grid-4{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}
+.grid-2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+.grid-asymm{display:grid;grid-template-columns:1.25fr .95fr;gap:16px}
+.card{background:var(--panel);border:1px solid var(--border);border-radius:8px;overflow:hidden}
+.card-head{padding:12px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;gap:10px;background:rgba(255,255,255,.015)}
+.card-title{font-weight:600;font-size:13px;letter-spacing:.2px;display:flex;align-items:center;gap:8px}
+.card-body{padding:16px}
+
+.kpi{padding:14px 16px}
+.kpi-label{font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);font-weight:600}
+.kpi-val{font-size:20px;font-weight:700;font-family:var(--mono);margin-top:4px;color:var(--text)}
+.kpi-sub{font-size:11.5px;color:var(--muted);margin-top:4px;font-family:var(--mono)}
+
+.form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.span-2{grid-column:span 2}
+.toggle-row{display:flex;align-items:center;justify-content:space-between;padding:9px 11px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;gap:12px}
+.toggle-row span{font-size:13px}
+.toggle-row small{display:block;color:var(--muted);font-size:11.5px}
+input[type=checkbox]{width:17px;height:17px;accent-color:var(--accent);cursor:pointer}
+
+.table-wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:12.5px}
+th,td{padding:8px 10px;border-bottom:1px solid var(--border);text-align:left;white-space:nowrap}
+th{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.5px;font-weight:600;background:rgba(0,0,0,.15)}
+tr:hover td{background:rgba(255,255,255,.02)}
+.badge{display:inline-block;padding:2px 6px;border-radius:4px;font-family:var(--mono);font-size:11px;border:1px solid var(--border);background:var(--bg2);color:var(--muted)}
+.badge.ok{border-color:rgba(16,185,129,.45);color:#6ee7b7;background:rgba(16,185,129,.1)}
+.badge.warn{border-color:rgba(245,158,11,.45);color:#fcd34d;background:rgba(245,158,11,.1)}
+.badge.err{border-color:rgba(239,68,68,.45);color:#fca5a5;background:rgba(239,68,68,.1)}
+
+.hex-box{background:#070a0f;border:1px solid var(--border);border-radius:6px;padding:12px;font-family:var(--mono);font-size:12px;line-height:1.5;max-height:360px;overflow:auto;color:#a5f3fc;white-space:pre}
+.log-box{background:#070a0f;border:1px solid var(--border);border-radius:6px;padding:10px 12px;font-family:var(--mono);font-size:12px;line-height:1.5;height:420px;overflow:auto;color:#cbd5e1}
+.log-line{padding:1px 0;word-break:break-word}
+.log-E{color:#fca5a5}.log-W{color:#fcd34d}.log-I{color:#93c5fd}
+
+.canvas-frame{background:#06080c;border:1px solid var(--border);border-radius:6px;padding:12px;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:240px;max-height:480px;overflow:auto}
+canvas{image-rendering:pixelated;max-width:100%;border:1px solid var(--border2)}
+
+.toast{position:fixed;right:20px;bottom:20px;z-index:99;padding:10px 15px;border-radius:6px;background:var(--panel2);border:1px solid var(--accent);color:var(--text);font-size:13px;box-shadow:0 12px 30px rgba(0,0,0,.5)}
+
+@media (max-width:960px){
+  .shell{grid-template-columns:1fr}
+  .sidebar{border-right:0;border-bottom:1px solid var(--border)}
+  .nav{flex-direction:row;overflow-x:auto}
+  .grid-4,.grid-2,.grid-asymm,.form-grid{grid-template-columns:1fr}
+  .span-2{grid-column:span 1}
+}
+</style>
+</head>
+<body>
+
+<!-- LOGIN SCREEN -->
+<div id="authScreen" class="auth-wrap">
+  <div class="auth-card">
+    <div class="brand-row">
+      <div class="brand-mark">FI</div>
+      <div>
+        <div class="brand-title" id="loginDevName">FI-Inspection-Gateway</div>
+        <div class="brand-sub" id="loginDevId">ESP32-C5 // RS-232 MQTT EDGE</div>
+      </div>
+    </div>
+    <div id="loginErr" class="alert alert-err hidden"></div>
+    <form id="loginForm">
+      <div class="field">
+        <label>Admin Username</label>
+        <input class="input" id="loginUser" value="admin" autocomplete="username" required>
+      </div>
+      <div class="field">
+        <label>Password</label>
+        <input class="input" id="loginPass" type="password" autocomplete="current-password" placeholder="Default: admin1234" required>
+      </div>
+      <button class="btn btn-primary" style="width:100%;margin-top:6px" type="submit">Sign In to Gateway</button>
+    </form>
+  </div>
+</div>
+
+<!-- DASHBOARD SHELL -->
+<div id="appShell" class="shell hidden">
+  <aside class="sidebar">
+    <div class="brand-row" style="padding:4px 6px 10px">
+      <div class="brand-mark">FI</div>
+      <div style="min-width:0">
+        <div class="brand-title" id="sideDevName" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">FI-Gateway</div>
+        <div class="brand-sub" id="sideDevId">esp32c5</div>
+      </div>
+    </div>
+
+    <nav class="nav">
+      <button class="nav-btn active" data-tab="overview">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+        Overview
+      </button>
+      <button class="nav-btn" data-tab="rs232">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 17l6-6-6-6"/><path d="M12 19h8"/></svg>
+        RS-232 &amp; HEX
+      </button>
+      <button class="nav-btn" data-tab="wifi">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M1.42 9a16 16 0 0 1 21.16 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><circle cx="12" cy="20" r="1"/></svg>
+        Wi-Fi &amp; Network
+      </button>
+      <button class="nav-btn" data-tab="mqtt">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="5" r="3"/><circle cx="5" cy="19" r="3"/><circle cx="19" cy="19" r="3"/><path d="M10.5 7.5L6.5 16.5M13.5 7.5l4 9"/></svg>
+        MQTT &amp; Topics
+      </button>
+      <button class="nav-btn" data-tab="debug">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
+        Debug Console
+      </button>
+      <button class="nav-btn" data-tab="system">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        Admin &amp; System
+      </button>
+    </nav>
+
+    <div class="sidebar-foot">
+      <div class="small muted mono" id="sideUser">user: admin</div>
+      <button class="btn btn-sm" id="logoutBtn">Log Out</button>
+    </div>
+  </aside>
+
+  <div class="main">
+    <header class="topbar">
+      <div class="topbar-left">
+        <div class="page-title" id="pageTitle">Gateway Overview</div>
+      </div>
+      <div class="status-pills">
+        <span class="pill"><span class="led" id="ledWifi"></span><span id="pillWifi">Wi-Fi: --</span></span>
+        <span class="pill"><span class="led" id="ledMqtt"></span><span id="pillMqtt">MQTT: --</span></span>
+        <span class="pill"><span class="led ok"></span><span id="pillUart">UART1: 9600</span></span>
+      </div>
+    </header>
+
+    <main class="content">
+      <!-- OVERVIEW -->
+      <section id="tab-overview" class="tab-view">
+        <div class="grid-4" style="margin-bottom:16px">
+          <div class="card kpi">
+            <div class="kpi-label">Wi-Fi Link</div>
+            <div class="kpi-val" id="kpiWifiIp">--</div>
+            <div class="kpi-sub" id="kpiWifiSub">--</div>
+          </div>
+          <div class="card kpi">
+            <div class="kpi-label">MQTT Telemetry</div>
+            <div class="kpi-val" id="kpiMqttState">--</div>
+            <div class="kpi-sub" id="kpiMqttSub">pub: 0 / err: 0</div>
+          </div>
+          <div class="card kpi">
+            <div class="kpi-label">RS-232 Captures</div>
+            <div class="kpi-val" id="kpiFrames">0</div>
+            <div class="kpi-sub" id="kpiBytes">0 bytes total</div>
+          </div>
+          <div class="card kpi">
+            <div class="kpi-label">System Health</div>
+            <div class="kpi-val" id="kpiUptime">0s</div>
+            <div class="kpi-sub" id="kpiHeap">heap: -- KB</div>
+          </div>
+        </div>
+
+        <div class="grid-asymm">
+          <div class="card">
+            <div class="card-head">
+              <div class="card-title">Recent RS-232 Captures</div>
+              <div style="display:flex;gap:8px">
+                <button class="btn btn-sm" onclick="injectTestFrame()">Simulate Frame</button>
+                <a class="btn btn-sm" href="/api/captures/latest.hex?dl=1">Download .hex</a>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>#</th><th>Bytes</th><th>Stripes</th><th>ESC K</th><th>Rate</th><th>MQTT</th><th>Commands</th></tr></thead>
+                <tbody id="histTable"><tr><td colspan="7" class="muted">No captures yet</td></tr></tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head">
+              <div class="card-title">Live Receipt Bitmap Preview</div>
+              <button class="btn btn-sm" onclick="toggleInvertCanvas()">Invert</button>
+            </div>
+            <div class="card-body">
+              <div class="canvas-frame">
+                <canvas id="receiptCanvas" class="hidden"></canvas>
+                <div id="canvasEmpty" class="muted small">Capture a 240B ESC/K receipt (or click Simulate Frame) to preview bitmap</div>
+              </div>
+              <div class="small muted mono" id="canvasMeta" style="margin-top:8px"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- RS232 & HEX -->
+      <section id="tab-rs232" class="tab-view hidden">
+        <div class="grid-asymm">
+          <div class="card">
+            <div class="card-head">
+              <div class="card-title">Latest Capture HEX Stream</div>
+              <div style="display:flex;gap:8px">
+                <button class="btn btn-sm" onclick="loadCaptures()">Refresh</button>
+                <a class="btn btn-sm" href="/api/captures/latest.hex?dl=1">Download .hex</a>
+              </div>
+            </div>
+            <div class="card-body">
+              <div class="hex-box" id="hexViewer">No capture recorded yet.</div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head"><div class="card-title">RS-232 / UART1 Hardware Config</div></div>
+            <div class="card-body">
+              <form id="uartForm" class="form-grid">
+                <div class="field"><label>Baud Rate</label>
+                  <select id="uBaud">
+                    <option value="4800">4800</option><option value="9600">9600</option>
+                    <option value="19200">19200</option><option value="38400">38400</option>
+                    <option value="57600">57600</option><option value="115200">115200</option>
+                  </select>
+                </div>
+                <div class="field"><label>Data Bits</label>
+                  <select id="uData"><option value="8">8 bits</option><option value="7">7 bits</option></select>
+                </div>
+                <div class="field"><label>ESP TX Pin (GPIO -> RS232 RX)</label><input class="input mono" type="number" id="uTx" min="0" max="28"></div>
+                <div class="field"><label>ESP RX Pin (GPIO <- RS232 TX)</label><input class="input mono" type="number" id="uRx" min="0" max="28"></div>
+                <div class="field"><label>Parity</label>
+                  <select id="uParity"><option value="0">None</option><option value="1">Odd</option><option value="2">Even</option></select>
+                </div>
+                <div class="field"><label>Stop Bits</label>
+                  <select id="uStop"><option value="1">1</option><option value="2">2</option></select>
+                </div>
+                <div class="field"><label>Idle Timeout (ms)</label><input class="input mono" type="number" id="uIdle" min="200" max="30000"></div>
+                <div class="field"><label>Max Capture (bytes)</label><input class="input mono" type="number" id="uMax" min="512" max="32768"></div>
+                <div class="toggle-row span-2">
+                  <div><span>Auto-Publish Captures to MQTT</span><small>Publish every completed RS-232 frame immediately</small></div>
+                  <input type="checkbox" id="uAutoPub">
+                </div>
+                <div class="toggle-row span-2">
+                  <div><span>Echo HEX to USB Serial Console</span><small>Print 80-char uppercase HEX to UART0/USB</small></div>
+                  <input type="checkbox" id="uEcho">
+                </div>
+                <div class="span-2"><button class="btn btn-primary" type="submit">Apply &amp; Save RS-232 Config</button></div>
+              </form>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- WIFI -->
+      <section id="tab-wifi" class="tab-view hidden">
+        <div class="grid-2">
+          <div class="card">
+            <div class="card-head"><div class="card-title">Wi-Fi Configuration</div></div>
+            <div class="card-body">
+              <form id="wifiForm" class="form-grid">
+                <div class="field span-2"><label>Operating Mode</label>
+                  <select id="wMode">
+                    <option value="0">AP + STA (Recommended — AP stays active as fallback)</option>
+                    <option value="1">STA Only (Client Mode)</option>
+                    <option value="2">AP Only (Isolated Setup Hotspot)</option>
+                  </select>
+                </div>
+                <div class="field"><label>Station SSID</label><input class="input" id="wStaSsid" placeholder="Factory Wi-Fi SSID"></div>
+                <div class="field"><label>Station Password (leave blank to keep)</label><input class="input" type="password" id="wStaPass" placeholder="********"></div>
+                <div class="field"><label>SoftAP SSID</label><input class="input" id="wApSsid"></div>
+                <div class="field"><label>SoftAP Password (min 8 chars, blank=keep)</label><input class="input" type="password" id="wApPass" placeholder="********"></div>
+                <div class="span-2" style="display:flex;gap:10px">
+                  <button class="btn btn-primary" type="submit">Save &amp; Apply Wi-Fi</button>
+                  <button class="btn" type="button" onclick="scanWifi()">Scan Nearby Networks</button>
+                </div>
+              </form>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head"><div class="card-title">Nearby Wi-Fi Networks</div></div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>SSID</th><th>RSSI</th><th>Ch</th><th>Security</th><th></th></tr></thead>
+                <tbody id="wifiScanTable"><tr><td colspan="5" class="muted">Click "Scan Nearby Networks" to discover SSIDs</td></tr></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- MQTT -->
+      <section id="tab-mqtt" class="tab-view hidden">
+        <div class="card">
+          <div class="card-head">
+            <div class="card-title">MQTT Broker &amp; Topic Mapping</div>
+            <button class="btn btn-sm" onclick="testMqtt()">Send Test Publish</button>
+          </div>
+          <div class="card-body">
+            <form id="mqttForm" class="form-grid">
+              <div class="toggle-row span-2">
+                <div><span>Enable MQTT Client</span><small>Connect to broker and publish RS-232 inspection captures</small></div>
+                <input type="checkbox" id="mEnabled">
+              </div>
+              <div class="field"><label>Broker Host or URI</label><input class="input mono" id="mHost" placeholder="192.168.1.100 or mqtt://broker"></div>
+              <div class="field"><label>Port</label><input class="input mono" type="number" id="mPort" min="1" max="65535"></div>
+              <div class="field"><label>Client ID</label><input class="input mono" id="mClientId"></div>
+              <div class="field"><label>Keepalive (seconds)</label><input class="input mono" type="number" id="mKeep" min="10" max="3600"></div>
+              <div class="field"><label>MQTT Username (optional)</label><input class="input" id="mUser"></div>
+              <div class="field"><label>MQTT Password (leave blank to keep)</label><input class="input" type="password" id="mPass" placeholder="********"></div>
+              <div class="field"><label>QoS Level</label>
+                <select id="mQos"><option value="0">QoS 0 (At most once)</option><option value="1">QoS 1 (At least once)</option><option value="2">QoS 2 (Exactly once)</option></select>
+              </div>
+              <div class="field"><label>Capture Payload Format</label>
+                <select id="mFmt">
+                  <option value="0">JSON Envelope + HEX (Recommended)</option>
+                  <option value="1">Raw Uppercase HEX String</option>
+                  <option value="2">Raw Binary Bytes</option>
+                </select>
+              </div>
+              <div class="field span-2"><label>Capture / HEX Publish Topic</label><input class="input mono" id="tHex"></div>
+              <div class="field"><label>Status &amp; LWT Topic</label><input class="input mono" id="tStatus"></div>
+              <div class="field"><label>Remote Command Subscribe Topic</label><input class="input mono" id="tCmd"></div>
+              <div class="field span-2"><label>Debug Log Topic</label><input class="input mono" id="tDebug"></div>
+              <div class="toggle-row span-2">
+                <div><span>Retain Capture Messages</span><small>Keep last captured frame retained on the broker</small></div>
+                <input type="checkbox" id="mRetain">
+              </div>
+              <div class="span-2"><button class="btn btn-primary" type="submit">Save &amp; Reconnect MQTT</button></div>
+            </form>
+          </div>
+        </div>
+      </section>
+
+      <!-- DEBUG -->
+      <section id="tab-debug" class="tab-view hidden">
+        <div class="card">
+          <div class="card-head">
+            <div class="card-title">Live Gateway Debug Monitor</div>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+              <input class="input" id="logFilter" placeholder="Filter logs..." style="width:180px;padding:5px 9px">
+              <button class="btn btn-sm" id="pauseLogsBtn" onclick="togglePauseLogs()">Pause</button>
+              <button class="btn btn-sm" onclick="clearLogs()">Clear</button>
+              <button class="btn btn-sm" onclick="injectTestFrame()">Inject Test Receipt</button>
+              <button class="btn btn-sm" onclick="testMqtt()">Test MQTT</button>
+            </div>
+          </div>
+          <div class="card-body">
+            <div class="log-box" id="logConsole"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- SYSTEM -->
+      <section id="tab-system" class="tab-view hidden">
+        <div class="grid-2">
+          <div class="card">
+            <div class="card-head"><div class="card-title">Device Identity &amp; Admin Credentials</div></div>
+            <div class="card-body">
+              <form id="sysForm" class="form-grid">
+                <div class="field span-2"><label>Gateway Name</label><input class="input" id="sDevName"></div>
+                <div class="field"><label>Device ID</label><input class="input mono" id="sDevId"></div>
+                <div class="field"><label>Machine / Line Location</label><input class="input" id="sLoc"></div>
+                <div class="field"><label>Admin Username</label><input class="input" id="sAdminUser"></div>
+                <div class="field"><label>New Admin Password (blank = keep)</label><input class="input" type="password" id="sAdminPass" placeholder="********"></div>
+                <div class="toggle-row span-2">
+                  <div><span>Verbose ESP-IDF Debug Logging</span><small>Include detailed driver/network debug logs</small></div>
+                  <input type="checkbox" id="sVerbose">
+                </div>
+                <div class="span-2"><button class="btn btn-primary" type="submit">Save Device &amp; Security</button></div>
+              </form>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head"><div class="card-title">Maintenance &amp; Backup</div></div>
+            <div class="card-body" style="display:flex;flex-direction:column;gap:12px">
+              <p class="muted small">Export the active NVS configuration as JSON, restart the gateway cleanly, or restore factory defaults.</p>
+              <div style="display:flex;gap:10px;flex-wrap:wrap">
+                <button class="btn" onclick="exportConfig()">Export Config JSON</button>
+                <button class="btn" onclick="rebootDevice()">Reboot Gateway</button>
+                <button class="btn btn-danger" onclick="factoryReset()">Factory Reset NVS</button>
+              </div>
+              <div class="small muted mono" id="sysDiag" style="margin-top:8px"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+
+<script>
+let authToken = sessionStorage.getItem('gw_token') || '';
+let lastLogSeq = 0;
+let lastTotalFrames = -1;
+let logsPaused = false;
+let invertCanvas = false;
+let cachedHex = '';
+let cachedConfig = {};
+
+function $(id){return document.getElementById(id)}
+
+function toast(msg, isErr=false){
+  const el=$('toast');
+  el.textContent=msg;
+  el.style.borderColor=isErr?'var(--err)':'var(--accent)';
+  el.classList.remove('hidden');
+  clearTimeout(window._t);
+  window._t=setTimeout(()=>el.classList.add('hidden'),3200);
+}
+
+async function api(path, opts={}){
+  const headers={'Content-Type':'application/json',...(opts.headers||{})};
+  if(authToken) headers['X-Auth-Token']=authToken;
+  const res=await fetch(path,{...opts,headers,credentials:'same-origin'});
+  if(res.status===401 && path!=='/api/login' && path!=='/api/auth/status'){
+    showLogin();
+    throw new Error('Session expired');
+  }
+  const ct=res.headers.get('content-type')||'';
+  if(ct.includes('application/json')) return await res.json();
+  return await res.text();
+}
+
+function showLogin(){
+  $('authScreen').classList.remove('hidden');
+  $('appShell').classList.add('hidden');
+}
+
+function showApp(){
+  $('authScreen').classList.add('hidden');
+  $('appShell').classList.remove('hidden');
+}
+
+async function boot(){
+  try{
+    const st=await api('/api/auth/status');
+    $('loginDevName').textContent=st.device_name||'FI-Gateway';
+    $('loginDevId').textContent=(st.device_id||'esp32c5')+' // RS-232 MQTT EDGE';
+    if(st.authenticated){
+      $('sideUser').textContent='user: '+(st.user||'admin');
+      showApp();
+      await initDashboard();
+    }else{
+      showLogin();
+    }
+  }catch(e){showLogin();}
+}
+
+$('loginForm').addEventListener('submit',async e=>{
+  e.preventDefault();
+  $('loginErr').classList.add('hidden');
+  try{
+    const r=await api('/api/login',{method:'POST',body:JSON.stringify({username:$('loginUser').value.trim(),password:$('loginPass').value})});
+    if(r.ok){
+      authToken=r.token||'';
+      if(authToken) sessionStorage.setItem('gw_token',authToken);
+      $('sideUser').textContent='user: '+(r.user||'admin');
+      $('loginPass').value='';
+      showApp();
+      await initDashboard();
+    }else{
+      $('loginErr').textContent=r.error||'Login failed';
+      $('loginErr').classList.remove('hidden');
+    }
+  }catch(err){
+    $('loginErr').textContent='Invalid username or password';
+    $('loginErr').classList.remove('hidden');
+  }
+});
+
+$('logoutBtn').addEventListener('click',async()=>{
+  try{await api('/api/logout',{method:'POST'});}catch(e){}
+  authToken='';sessionStorage.removeItem('gw_token');showLogin();
+});
+
+const tabTitles={overview:'Gateway Overview',rs232:'RS-232 & HEX Stream',wifi:'Wi-Fi & Network',mqtt:'MQTT Broker & Topics',debug:'Debug & Live Console',system:'Admin & System'};
+document.querySelectorAll('.nav-btn').forEach(btn=>{
+  btn.addEventListener('click',()=>{
+    const tab=btn.dataset.tab;
+    document.querySelectorAll('.nav-btn').forEach(b=>b.classList.toggle('active',b===btn));
+    document.querySelectorAll('.tab-view').forEach(v=>v.classList.toggle('hidden',v.id!=='tab-'+tab));
+    $('pageTitle').textContent=tabTitles[tab]||tab;
+  });
+});
+
+async function initDashboard(){
+  await loadConfig();
+  await refreshAll();
+  if(!window._poll){
+    window._poll=setInterval(refreshStatusAndLogs,2000);
+  }
+}
+
+async function refreshAll(){
+  await refreshStatusAndLogs();
+  await loadCaptures();
+}
+
+function fmtUptime(s){
+  const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sec=s%60;
+  return h>0?`${h}h ${m}m ${sec}s`:(m>0?`${m}m ${sec}s`:`${sec}s`);
+}
+
+async function refreshStatusAndLogs(){
+  if($('appShell').classList.contains('hidden')) return;
+  try{
+    const st=await api('/api/status');
+    $('sideDevName').textContent=st.device.name;
+    $('sideDevId').textContent=st.device.id;
+
+    // Topbar pills
+    const w=st.wifi;
+    $('ledWifi').className='led '+(w.sta_connected?'ok':(w.ap_enabled?'warn':'err'));
+    $('pillWifi').textContent=w.sta_connected?`STA ${w.sta_ip} (${w.sta_rssi}dBm)`:`AP ${w.ap_ip}`;
+
+    const m=st.mqtt;
+    $('ledMqtt').className='led '+(m.connected?'ok':(m.enabled?'err':''));
+    $('pillMqtt').textContent=m.enabled?(m.connected?'MQTT Online':'MQTT Offline'):'MQTT Disabled';
+    $('pillUart').textContent=`UART1: ${st.uart.baud} TX=${st.uart.tx_pin} RX=${st.uart.rx_pin}`;
+
+    // KPIs
+    $('kpiWifiIp').textContent=w.sta_connected?w.sta_ip:w.ap_ip;
+    $('kpiWifiSub').textContent=w.sta_connected?`${w.sta_ssid} (${w.sta_rssi} dBm)`:`AP: ${w.ap_ssid} (${w.ap_clients} clients)`;
+    $('kpiMqttState').textContent=m.enabled?(m.connected?'Connected':'Reconnecting'):'Disabled';
+    $('kpiMqttSub').textContent=`pub: ${m.pub_ok} / err: ${m.pub_err}`+(m.last_err?` | ${m.last_err}`:'');
+    $('kpiFrames').textContent=st.uart.total_frames;
+    $('kpiBytes').textContent=`${st.uart.total_rx_bytes} bytes total`;
+    $('kpiUptime').textContent=fmtUptime(st.uptime_s);
+    $('kpiHeap').textContent=`free: ${(st.free_heap/1024).toFixed(1)} KB (min ${(st.min_heap/1024).toFixed(1)} KB)`;
+    $('sysDiag').textContent=`STA MAC: ${w.sta_mac} | AP MAC: ${w.ap_mac} | GW: ${w.sta_gw||'--'}`;
+    if(st.uart.total_frames!==lastTotalFrames){
+      lastTotalFrames=st.uart.total_frames;
+      loadCaptures();
+    }
+  }catch(e){}
+
+  if(!logsPaused){
+    try{
+      const res=await api('/api/logs?since='+lastLogSeq);
+      if(res.logs && res.logs.length){
+        lastLogSeq=res.last_seq;
+        const box=$('logConsole');
+        const flt=$('logFilter').value.trim().toLowerCase();
+        for(const l of res.logs){
+          if(flt && !l.text.toLowerCase().includes(flt)) continue;
+          const div=document.createElement('div');
+          const lvl=l.text.startsWith('E ')?'log-E':(l.text.startsWith('W ')?'log-W':(l.text.startsWith('I ')?'log-I':''));
+          div.className='log-line '+lvl;
+          div.textContent=`[${(l.ts/1000).toFixed(2)}s] ${l.text}`;
+          box.appendChild(div);
+        }
+        while(box.children.length>150) box.removeChild(box.firstChild);
+        box.scrollTop=box.scrollHeight;
+      }
+    }catch(e){}
+  }
+}
+
+async function loadCaptures(){
+  try{
+    const c=await api('/api/captures');
+    const tb=$('histTable');
+    if(!c.history || !c.history.length){
+      tb.innerHTML='<tr><td colspan="7" class="muted">No captures yet</td></tr>';
+      return;
+    }
+    tb.innerHTML=c.history.map(h=>{
+      const cmds=[];
+      if(h.commands.esc_at) cmds.push('ESC@');
+      if(h.commands.esc_k) cmds.push('ESCK');
+      if(h.commands.cr) cmds.push('CR');
+      if(h.commands.lf) cmds.push('LF');
+      if(h.commands.esc_1) cmds.push('ESC1');
+      const mq=h.mqtt_published?'<span class="badge ok">SENT</span>':'<span class="badge">--</span>';
+      return `<tr><td class="mono">#${h.seq}</td><td class="mono">${h.bytes}</td><td class="mono">${h.raster_stripes}</td><td class="mono">${h.esc_k_count}</td><td class="mono">${h.rate_bps} B/s</td><td>${mq}</td><td>${cmds.map(x=>`<span class="badge">${x}</span>`).join(' ')}</td></tr>`;
+    }).join('');
+
+    const hex=await api('/api/captures/latest.hex');
+    cachedHex=typeof hex==='string'?hex:'';
+    $('hexViewer').textContent=cachedHex||'No capture recorded yet.';
+    drawReceipt(cachedHex);
+  }catch(e){}
+}
+
+function drawReceipt(hexText){
+  const canvas=$('receiptCanvas'), empty=$('canvasEmpty'), meta=$('canvasMeta');
+  if(!hexText){canvas.classList.add('hidden');empty.classList.remove('hidden');meta.textContent='';return;}
+  const clean=hexText.replace(/\s+/g,'');
+  const ROW=240, MARKER='0D0A1B4BF000', FIRST='1B4BF000';
+  const parts=clean.split(MARKER);
+  const segs=[];
+  if(parts.length && parts[0].includes(FIRST)){
+    const t=parts[0].split(FIRST)[1];
+    if(t && t.length===ROW*2) segs.push(t);
+  }
+  for(let i=1;i<parts.length;i++){
+    if(parts[i].length>=ROW*2) segs.push(parts[i].slice(0,ROW*2));
+  }
+  if(!segs.length){canvas.classList.add('hidden');empty.classList.remove('hidden');meta.textContent='No 240B ESC/K raster stripes in latest frame';return;}
+
+  const w=ROW, h=segs.length*8;
+  canvas.width=w; canvas.height=h;
+  canvas.style.width=(w*2)+'px';
+  const ctx=canvas.getContext('2d');
+  const img=ctx.createImageData(w,h);
+  const d=img.data;
+  for(let r=0;r<segs.length;r++){
+    const s=segs[r];
+    for(let x=0;x<ROW;x++){
+      const byteVal=parseInt(s.substr(x*2,2),16);
+      const dx=ROW-1-x;
+      for(let b=0;b<8;b++){
+        const ink=((byteVal&(1<<b))===0);
+        const on=invertCanvas?!ink:ink;
+        const idx=((r*8+b)*w+dx)*4;
+        const c=on?240:12;
+        d[idx]=c; d[idx+1]=on?248:16; d[idx+2]=on?255:24; d[idx+3]=255;
+      }
+    }
+  }
+  ctx.putImageData(img,0,0);
+  canvas.classList.remove('hidden');
+  empty.classList.add('hidden');
+  meta.textContent=`Rendered ${w}x${h} px (${segs.length} stripes)`;
+}
+
+function toggleInvertCanvas(){invertCanvas=!invertCanvas;drawReceipt(cachedHex);}
+
+async function loadConfig(){
+  const c=await api('/api/config');
+  cachedConfig=c;
+  $('uBaud').value=String(c.uart_baud);
+  $('uData').value=String(c.uart_data_bits);
+  $('uTx').value=c.uart_tx_pin;
+  $('uRx').value=c.uart_rx_pin;
+  $('uParity').value=String(c.uart_parity);
+  $('uStop').value=String(c.uart_stop_bits);
+  $('uIdle').value=c.idle_timeout_ms;
+  $('uMax').value=c.max_capture_bytes;
+  $('uAutoPub').checked=!!c.auto_publish_mqtt;
+  $('uEcho').checked=!!c.serial_echo_hex;
+
+  $('wMode').value=String(c.wifi_mode);
+  $('wStaSsid').value=c.sta_ssid||'';
+  $('wStaPass').value='';
+  $('wApSsid').value=c.ap_ssid||'';
+  $('wApPass').value='';
+
+  $('mEnabled').checked=!!c.mqtt_enabled;
+  $('mHost').value=c.mqtt_host||'';
+  $('mPort').value=c.mqtt_port||1883;
+  $('mClientId').value=c.mqtt_client_id||'';
+  $('mKeep').value=c.mqtt_keepalive||60;
+  $('mUser').value=c.mqtt_user||'';
+  $('mPass').value='';
+  $('mQos').value=String(c.mqtt_qos);
+  $('mFmt').value=String(c.mqtt_format);
+  $('mRetain').checked=!!c.mqtt_retain;
+  $('tHex').value=c.topic_hex||'';
+  $('tStatus').value=c.topic_status||'';
+  $('tCmd').value=c.topic_cmd||'';
+  $('tDebug').value=c.topic_debug||'';
+
+  $('sDevName').value=c.device_name||'';
+  $('sDevId').value=c.device_id||'';
+  $('sLoc').value=c.location||'';
+  $('sAdminUser').value=c.admin_user||'admin';
+  $('sAdminPass').value='';
+  $('sVerbose').checked=!!c.verbose_debug;
+}
+
+async function saveConfig(patch, msg){
+  const res=await api('/api/config',{method:'POST',body:JSON.stringify(patch)});
+  if(res.ok){
+    toast(msg||'Configuration saved');
+    await loadConfig();
+    await refreshStatusAndLogs();
+  }else{
+    toast(res.error||'Failed to save config',true);
+  }
+}
+
+$('uartForm').addEventListener('submit',async e=>{
+  e.preventDefault();
+  await saveConfig({
+    uart_baud:+$('uBaud').value,uart_data_bits:+$('uData').value,
+    uart_tx_pin:+$('uTx').value,uart_rx_pin:+$('uRx').value,
+    uart_parity:+$('uParity').value,uart_stop_bits:+$('uStop').value,
+    idle_timeout_ms:+$('uIdle').value,max_capture_bytes:+$('uMax').value,
+    auto_publish_mqtt:$('uAutoPub').checked,serial_echo_hex:$('uEcho').checked
+  },'RS-232 UART1 configuration applied');
+});
+
+$('wifiForm').addEventListener('submit',async e=>{
+  e.preventDefault();
+  await saveConfig({
+    wifi_mode:+$('wMode').value,
+    sta_ssid:$('wStaSsid').value.trim(),
+    sta_pass:$('wStaPass').value,
+    ap_ssid:$('wApSsid').value.trim(),
+    ap_pass:$('wApPass').value
+  },'Wi-Fi config saved (restarting interface)');
+});
+
+$('mqttForm').addEventListener('submit',async e=>{
+  e.preventDefault();
+  await saveConfig({
+    mqtt_enabled:$('mEnabled').checked,
+    mqtt_host:$('mHost').value.trim(),
+    mqtt_port:+$('mPort').value,
+    mqtt_client_id:$('mClientId').value.trim(),
+    mqtt_keepalive:+$('mKeep').value,
+    mqtt_user:$('mUser').value.trim(),
+    mqtt_pass:$('mPass').value,
+    mqtt_qos:+$('mQos').value,
+    mqtt_format:+$('mFmt').value,
+    mqtt_retain:$('mRetain').checked,
+    topic_hex:$('tHex').value.trim(),
+    topic_status:$('tStatus').value.trim(),
+    topic_cmd:$('tCmd').value.trim(),
+    topic_debug:$('tDebug').value.trim()
+  },'MQTT configuration saved & reconnecting');
+});
+
+$('sysForm').addEventListener('submit',async e=>{
+  e.preventDefault();
+  await saveConfig({
+    device_name:$('sDevName').value.trim(),
+    device_id:$('sDevId').value.trim(),
+    location:$('sLoc').value.trim(),
+    admin_user:$('sAdminUser').value.trim(),
+    admin_pass:$('sAdminPass').value,
+    verbose_debug:$('sVerbose').checked
+  },'Device & security settings saved');
+});
+
+async function scanWifi(){
+  $('wifiScanTable').innerHTML='<tr><td colspan="5" class="muted">Scanning 2.4/5GHz channels...</td></tr>';
+  try{
+    const res=await api('/api/wifi/scan',{method:'POST'});
+    if(!res.aps || !res.aps.length){
+      $('wifiScanTable').innerHTML='<tr><td colspan="5" class="muted">No networks found</td></tr>';
+      return;
+    }
+    $('wifiScanTable').innerHTML=res.aps.map(a=>`<tr><td class="mono">${a.ssid}</td><td class="mono">${a.rssi} dBm</td><td class="mono">${a.channel}</td><td><span class="badge">${a.auth===0?'OPEN':'WPA'}</span></td><td><button class="btn btn-sm" onclick="pickSsid('${a.ssid.replace(/'/g,"\\'")}')">Select</button></td></tr>`).join('');
+  }catch(e){toast('Wi-Fi scan failed',true);}
+}
+function pickSsid(s){$('wStaSsid').value=s;$('wStaPass').focus();toast('Selected SSID: '+s);}
+
+async function testMqtt(){
+  const r=await api('/api/actions/test-mqtt',{method:'POST'});
+  toast(r.ok?'Test MQTT message published':'MQTT not connected',!r.ok);
+}
+async function injectTestFrame(){
+  await api('/api/actions/test-uart',{method:'POST'});
+  toast('Synthetic ESC/P receipt injected');
+  setTimeout(refreshAll,250);
+}
+function togglePauseLogs(){logsPaused=!logsPaused;$('pauseLogsBtn').textContent=logsPaused?'Resume':'Pause';}
+async function clearLogs(){await api('/api/logs/clear',{method:'POST'});$('logConsole').innerHTML='';}
+function exportConfig(){
+  const blob=new Blob([JSON.stringify(cachedConfig,null,2)],{type:'application/json'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=(cachedConfig.device_id||'gateway')+'-config.json';a.click();
+}
+async function rebootDevice(){if(confirm('Reboot ESP32-C5 gateway now?')){await api('/api/actions/reboot',{method:'POST'});toast('Rebooting gateway...');}}
+async function factoryReset(){if(confirm('Reset all NVS Wi-Fi, MQTT & Admin settings to factory defaults?')){await api('/api/actions/factory-reset',{method:'POST'});toast('Factory reset complete, rebooting...');}}
+
+boot();
+</script>
+</body>
+</html>

@@ -1,0 +1,59 @@
+{
+  "document_type": "Inspection Record Form",
+  "date": null,
+  "batch_number": null,
+  "length": null,
+  "supplier": null,
+  "defect_rows": [
+    {
+      "left_label": "shadb4",
+      "left_value": null,
+      "right_label": "missy4",
+      "right_value": null
+    },
+    {
+      "left_label": "Thik4",
+      "left_value": null,
+      "right_label": "missl",
+      "right_value": null
+    },
+    {
+      "left_label": "Knot's",
+      "left_value": null,
+      "right_label": "dyein4",
+      "right_value": null
+    },
+    {
+      "left_label": "Creas4",
+      "left_value": null,
+      "right_label": "PRINT1",
+      "right_value": null
+    },
+    {
+      "left_label": "spotlm",
+      "left_value": null,
+      "right_label": "holep",
+      "right_value": null
+    },
+    {
+      "left_label": "spot4",
+      "left_value": null,
+      "right_label": "Joint4",
+      "right_value": null
+    }
+  ],
+  "defects": {
+    "shadb4": null,
+    "Thik4": null,
+    "Knot's": null,
+    "Creas4": null,
+    "spotlm": null,
+    "spot4": null
+  },
+  "source_file": "render_from_hex.pbm",
+  "image_size": [
+    1920,
+    2560
+  ],
+  "engine": "calibrated_reverse_no_ocr_pbm"
+}
