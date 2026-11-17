@@ -7,6 +7,7 @@ idf_component_register(
         "mqtt_manager.c"
         "ota_manager.c"
         "rs232_reader.c"
+        "spool_manager.c"
         "web_server.c"
     INCLUDE_DIRS "."
     EMBED_TXTFILES "web/index.html"

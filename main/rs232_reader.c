@@ -14,7 +14,7 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "gateway_state.h"
-#include "mqtt_manager.h"
+#include "spool_manager.h"
 
 #define RS232_UART_PORT     UART_NUM_1
 #define UART_RX_BUF_SIZE    4096
@@ -148,34 +148,20 @@ static void finalize_capture(rx_capture_t *st, const gw_config_t *cfg, const cha
     app_config_safe_copy(meta.end_reason, sizeof(meta.end_reason), reason);
 
     size_t stored_len = st->total_bytes < st->raw_cap ? st->total_bytes : st->raw_cap;
-    gateway_state_record_capture(&meta, st->raw_buf, stored_len);
+    if (st->raw_buf && stored_len > 0) {
+        spool_manager_enqueue(&meta, st->raw_buf, stored_len);
+    }
 
-    /* Free RX scratch buffer before MQTT publish so max heap is available */
+    /* Free RX scratch buffer right after spooling */
     if (st->raw_buf) {
         free(st->raw_buf);
         st->raw_buf = NULL;
         st->raw_cap = 0;
     }
 
-    gw_capture_meta_t saved_meta = {0};
-    gateway_state_get_latest(&saved_meta, NULL, 0, NULL);
-
-    ESP_LOGI(TAG, "Frame #%lu captured: %zu bytes (%lu ms, ESC_K=%zu, stripes=%zu, reason=%s)",
-             (unsigned long)saved_meta.seq, st->total_bytes, (unsigned long)dur_ms,
-             st->esc_k_count, st->raster_stripes, reason);
-
-    if (cfg->auto_publish_mqtt && cfg->mqtt_enabled && stored_len > 0) {
-        uint8_t *pub_buf = (uint8_t *)malloc(stored_len);
-        size_t got_len = 0;
-        if (pub_buf && gateway_state_get_latest(NULL, pub_buf, stored_len, &got_len) && got_len > 0) {
-            bool ok = mqtt_manager_publish_capture(&saved_meta, pub_buf, got_len);
-            gateway_state_mark_latest_mqtt(saved_meta.seq, ok);
-        } else {
-            ESP_LOGE(TAG, "OOM copying %zu bytes for MQTT publish", stored_len);
-            gateway_state_mark_latest_mqtt(saved_meta.seq, false);
-        }
-        free(pub_buf);
-    }
+    ESP_LOGI(TAG, "Frame #%lu captured: %zu bytes (%lu ms, CRC32=%08lX, ESC_K=%zu, stripes=%zu, reason=%s)",
+             (unsigned long)meta.seq, st->total_bytes, (unsigned long)dur_ms,
+             (unsigned long)meta.crc32, st->esc_k_count, st->raster_stripes, reason);
 
     st->active = false;
 }

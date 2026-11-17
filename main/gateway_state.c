@@ -150,7 +150,6 @@ void gateway_state_record_capture(const gw_capture_meta_t *meta, const uint8_t *
     s_metrics.last_capture_ms = meta->timestamp_ms;
 
     gw_capture_meta_t stored = *meta;
-    stored.seq = s_metrics.total_frames;
 
     if (s_history_count < GW_MAX_CAPTURES_HISTORY) {
         for (size_t i = s_history_count; i > 0; i--) {
@@ -179,27 +178,59 @@ void gateway_state_record_capture(const gw_capture_meta_t *meta, const uint8_t *
     xSemaphoreGive(s_state_mutex);
 }
 
-void gateway_state_mark_latest_mqtt(uint32_t seq, bool ok)
+void gateway_state_update_delivery(uint32_t seq, bool mqtt_published, gw_ack_state_t ack_state, uint8_t attempts)
+{
+    if (!s_state_mutex) {
+        return;
+    }
+    xSemaphoreTake(s_state_mutex, portMAX_DELAY);
+    if (mqtt_published) {
+        s_metrics.mqtt_pub_ok++;
+        s_metrics.last_mqtt_pub_ms = esp_timer_get_time() / 1000;
+    } else if (ack_state == GW_ACK_QUEUED && attempts > 0) {
+        s_metrics.mqtt_pub_err++;
+    }
+    if (s_has_latest && s_latest_meta.seq == seq) {
+        if (mqtt_published) {
+            s_latest_meta.mqtt_published = true;
+        }
+        s_latest_meta.ack_state = (uint8_t)ack_state;
+        s_latest_meta.attempts = attempts;
+    }
+    for (size_t i = 0; i < s_history_count; i++) {
+        if (s_history[i].seq == seq) {
+            if (mqtt_published) {
+                s_history[i].mqtt_published = true;
+            }
+            s_history[i].ack_state = (uint8_t)ack_state;
+            s_history[i].attempts = attempts;
+            break;
+        }
+    }
+    xSemaphoreGive(s_state_mutex);
+}
+
+void gateway_state_inc_server_ack(bool ok)
 {
     if (!s_state_mutex) {
         return;
     }
     xSemaphoreTake(s_state_mutex, portMAX_DELAY);
     if (ok) {
-        s_metrics.mqtt_pub_ok++;
-        s_metrics.last_mqtt_pub_ms = esp_timer_get_time() / 1000;
+        s_metrics.server_ack_ok++;
     } else {
-        s_metrics.mqtt_pub_err++;
+        s_metrics.server_nack_cnt++;
     }
-    if (s_has_latest && s_latest_meta.seq == seq) {
-        s_latest_meta.mqtt_published = ok;
+    xSemaphoreGive(s_state_mutex);
+}
+
+void gateway_state_inc_crc_error(void)
+{
+    if (!s_state_mutex) {
+        return;
     }
-    for (size_t i = 0; i < s_history_count; i++) {
-        if (s_history[i].seq == seq) {
-            s_history[i].mqtt_published = ok;
-            break;
-        }
-    }
+    xSemaphoreTake(s_state_mutex, portMAX_DELAY);
+    s_metrics.crc_error_cnt++;
     xSemaphoreGive(s_state_mutex);
 }
 

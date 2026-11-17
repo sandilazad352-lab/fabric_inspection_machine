@@ -6,6 +6,7 @@
 #include "nvs_flash.h"
 #include "ota_manager.h"
 #include "rs232_reader.h"
+#include "spool_manager.h"
 #include "web_server.h"
 #include "wifi_manager.h"
 
@@ -31,6 +32,7 @@ void app_main(void)
     ESP_LOGI(TAG, "Starting %s (%s)", cfg.device_name, cfg.device_id);
 
     ESP_ERROR_CHECK(wifi_manager_init());
+    ESP_ERROR_CHECK(spool_manager_init());
     ESP_ERROR_CHECK(mqtt_manager_init());
     ESP_ERROR_CHECK(rs232_reader_init());
     ESP_ERROR_CHECK(web_server_start());

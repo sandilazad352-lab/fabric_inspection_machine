@@ -68,6 +68,12 @@ typedef struct {
     char topic_status[128];
     char topic_cmd[128];
     char topic_debug[128];
+    char topic_ack[128];
+
+    /* Reliability: CRC32 + Server ACK + Offline Spool Sync */
+    bool require_server_ack;
+    uint32_t ack_timeout_ms;
+    uint32_t max_spool_files;
 } gw_config_t;
 
 void app_config_safe_copy(char *dst, size_t dst_sz, const char *src);

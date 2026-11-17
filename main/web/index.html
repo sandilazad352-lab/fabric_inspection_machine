@@ -192,6 +192,7 @@ canvas{image-rendering:pixelated;max-width:100%;border:1px solid var(--border2)}
       <div class="status-pills">
         <span class="pill"><span class="led" id="ledWifi"></span><span id="pillWifi">Wi-Fi: --</span></span>
         <span class="pill"><span class="led" id="ledMqtt"></span><span id="pillMqtt">MQTT: --</span></span>
+        <span class="pill"><span class="led" id="ledSync"></span><span id="pillSync">Sync: --</span></span>
         <span class="pill"><span class="led ok"></span><span id="pillUart">UART1: 9600</span></span>
       </div>
     </header>
@@ -233,9 +234,16 @@ canvas{image-rendering:pixelated;max-width:100%;border:1px solid var(--border2)}
             </div>
             <div class="table-wrap">
               <table>
-                <thead><tr><th>#</th><th>Bytes</th><th>Stripes</th><th>ESC K</th><th>Rate</th><th>MQTT</th><th>Commands</th></tr></thead>
-                <tbody id="histTable"><tr><td colspan="7" class="muted">No captures yet</td></tr></tbody>
+                <thead><tr><th>#</th><th>Bytes</th><th>CRC32</th><th>Stripes</th><th>Server ACK</th><th>Commands</th></tr></thead>
+                <tbody id="histTable"><tr><td colspan="6" class="muted">No captures yet</td></tr></tbody>
               </table>
+            </div>
+            <div style="padding:12px 16px;border-top:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;background:rgba(255,255,255,.01)">
+              <div class="small mono" id="spoolSummary">Flash Spool: --</div>
+              <div style="display:flex;gap:8px">
+                <button class="btn btn-sm" onclick="syncSpoolNow()">Sync Queue Now</button>
+                <button class="btn btn-sm btn-danger" onclick="purgeSpool()">Purge Queue</button>
+              </div>
             </div>
           </div>
 
@@ -380,7 +388,14 @@ canvas{image-rendering:pixelated;max-width:100%;border:1px solid var(--border2)}
               <div class="field span-2"><label>Capture / HEX Publish Topic</label><input class="input mono" id="tHex"></div>
               <div class="field"><label>Status &amp; LWT Topic</label><input class="input mono" id="tStatus"></div>
               <div class="field"><label>Remote Command Subscribe Topic</label><input class="input mono" id="tCmd"></div>
-              <div class="field span-2"><label>Debug Log Topic</label><input class="input mono" id="tDebug"></div>
+              <div class="field"><label>Server ACK Subscribe Topic</label><input class="input mono" id="tAck"></div>
+              <div class="field"><label>Debug Log Topic</label><input class="input mono" id="tDebug"></div>
+              <div class="field"><label>Server ACK Timeout (ms)</label><input class="input mono" type="number" id="mAckTimeout" min="1000" max="120000"></div>
+              <div class="field"><label>Max Offline Flash Spool Frames</label><input class="input mono" type="number" id="mMaxSpool" min="5" max="120"></div>
+              <div class="toggle-row span-2">
+                <div><span>Require Server-Side ACK (CRC32 Verified)</span><small>Keep frame in flash spool until backend confirms receipt on ACK topic</small></div>
+                <input type="checkbox" id="mReqAck">
+              </div>
               <div class="toggle-row span-2">
                 <div><span>Retain Capture Messages</span><small>Keep last captured frame retained on the broker</small></div>
                 <input type="checkbox" id="mRetain">
@@ -613,19 +628,23 @@ async function refreshStatusAndLogs(){
     const m=st.mqtt;
     $('ledMqtt').className='led '+(m.connected?'ok':(m.enabled?'err':''));
     $('pillMqtt').textContent=m.enabled?(m.connected?'MQTT Online':'MQTT Offline'):'MQTT Disabled';
+    const sp=st.spool||{};
+    $('ledSync').className='led '+(sp.pending_count===0?'ok':(m.connected?'warn':'err'));
+    $('pillSync').textContent=`Spool: ${sp.pending_count||0} (${sp.sync_state||'idle'})`;
     $('pillUart').textContent=`UART1: ${st.uart.baud} TX=${st.uart.tx_pin} RX=${st.uart.rx_pin}`;
 
     // KPIs
     $('kpiWifiIp').textContent=w.sta_connected?w.sta_ip:w.ap_ip;
     $('kpiWifiSub').textContent=w.sta_connected?`${w.sta_ssid} (${w.sta_rssi} dBm)`:`AP: ${w.ap_ssid} (${w.ap_clients} clients)`;
     $('kpiMqttState').textContent=m.enabled?(m.connected?'Connected':'Reconnecting'):'Disabled';
-    $('kpiMqttSub').textContent=`pub: ${m.pub_ok} / err: ${m.pub_err}`+(m.last_err?` | ${m.last_err}`:'');
+    $('kpiMqttSub').textContent=`pub:${m.pub_ok} ack:${m.server_ack_ok||0} nack:${m.server_nack||0}`+(m.last_err?` | ${m.last_err}`:'');
     $('kpiFrames').textContent=st.uart.total_frames;
-    $('kpiBytes').textContent=`${st.uart.total_rx_bytes} bytes total`;
+    $('kpiBytes').textContent=`${st.uart.total_rx_bytes} B | pending:${sp.pending_count||0}`;
     $('kpiUptime').textContent=fmtUptime(st.uptime_s);
     $('kpiHeap').textContent=`free: ${(st.free_heap/1024).toFixed(1)} KB (min ${(st.min_heap/1024).toFixed(1)} KB)`;
+    $('spoolSummary').textContent=`Flash Spool (${sp.sync_state||'--'}): ${sp.pending_count||0} queued (${((sp.pending_bytes||0)/1024).toFixed(1)} KB) | SPIFFS ${((sp.used_bytes||0)/1024).toFixed(0)}/${((sp.total_bytes||0)/1024).toFixed(0)} KB | CRC err: ${m.crc_errors||0}`;
     $('sysDiag').textContent=`STA MAC: ${w.sta_mac} | AP MAC: ${w.ap_mac} | GW: ${w.sta_gw||'--'}`;
-    if(st.uart.total_frames!==lastTotalFrames){
+    if(st.uart.total_frames!==lastTotalFrames || (sp.pending_count||0)>0){
       lastTotalFrames=st.uart.total_frames;
       loadCaptures();
     }
@@ -658,7 +677,7 @@ async function loadCaptures(){
     const c=await api('/api/captures');
     const tb=$('histTable');
     if(!c.history || !c.history.length){
-      tb.innerHTML='<tr><td colspan="7" class="muted">No captures yet</td></tr>';
+      tb.innerHTML='<tr><td colspan="6" class="muted">No captures yet</td></tr>';
       return;
     }
     tb.innerHTML=c.history.map(h=>{
@@ -668,8 +687,9 @@ async function loadCaptures(){
       if(h.commands.cr) cmds.push('CR');
       if(h.commands.lf) cmds.push('LF');
       if(h.commands.esc_1) cmds.push('ESC1');
-      const mq=h.mqtt_published?'<span class="badge ok">SENT</span>':'<span class="badge">--</span>';
-      return `<tr><td class="mono">#${h.seq}</td><td class="mono">${h.bytes}</td><td class="mono">${h.raster_stripes}</td><td class="mono">${h.esc_k_count}</td><td class="mono">${h.rate_bps} B/s</td><td>${mq}</td><td>${cmds.map(x=>`<span class="badge">${x}</span>`).join(' ')}</td></tr>`;
+      const ackMap={acked:'<span class="badge ok">ACKED</span>',sent:'<span class="badge ok">SENT</span>',wait_ack:'<span class="badge warn">WAIT ACK</span>',nack:'<span class="badge err">NACK</span>',queued:'<span class="badge warn">QUEUED</span>'};
+      const ackBadge=ackMap[h.ack_state]||'<span class="badge">--</span>';
+      return `<tr><td class="mono">#${h.seq}</td><td class="mono">${h.bytes}</td><td class="mono">${h.crc32||'--'}</td><td class="mono">${h.raster_stripes}</td><td>${ackBadge} <span class="small muted mono">(${h.attempts||0}x)</span></td><td>${cmds.map(x=>`<span class="badge">${x}</span>`).join(' ')}</td></tr>`;
     }).join('');
 
     const hex=await api('/api/captures/latest.hex');
@@ -757,6 +777,10 @@ async function loadConfig(){
   $('tStatus').value=c.topic_status||'';
   $('tCmd').value=c.topic_cmd||'';
   $('tDebug').value=c.topic_debug||'';
+  $('tAck').value=c.topic_ack||'';
+  $('mReqAck').checked=!!c.require_server_ack;
+  $('mAckTimeout').value=c.ack_timeout_ms||10000;
+  $('mMaxSpool').value=c.max_spool_files||100;
 
   $('sDevName').value=c.device_name||'';
   $('sDevId').value=c.device_id||'';
@@ -815,8 +839,12 @@ $('mqttForm').addEventListener('submit',async e=>{
     topic_hex:$('tHex').value.trim(),
     topic_status:$('tStatus').value.trim(),
     topic_cmd:$('tCmd').value.trim(),
-    topic_debug:$('tDebug').value.trim()
-  },'MQTT configuration saved & reconnecting');
+    topic_debug:$('tDebug').value.trim(),
+    topic_ack:$('tAck').value.trim(),
+    require_server_ack:$('mReqAck').checked,
+    ack_timeout_ms:+$('mAckTimeout').value,
+    max_spool_files:+$('mMaxSpool').value
+  },'MQTT & reliability configuration saved');
 });
 
 $('sysForm').addEventListener('submit',async e=>{
@@ -847,6 +875,18 @@ function pickSsid(s){$('wStaSsid').value=s;$('wStaPass').focus();toast('Selected
 async function testMqtt(){
   const r=await api('/api/actions/test-mqtt',{method:'POST'});
   toast(r.ok?'Test MQTT message published':'MQTT not connected',!r.ok);
+}
+async function syncSpoolNow(){
+  await api('/api/actions/sync-now',{method:'POST'});
+  toast('Offline spool sync triggered');
+  setTimeout(refreshAll,400);
+}
+async function purgeSpool(){
+  if(confirm('Delete all queued offline frames from flash spool?')){
+    await api('/api/actions/purge-spool',{method:'POST'});
+    toast('Offline spool purged');
+    setTimeout(refreshAll,300);
+  }
 }
 async function injectTestFrame(){
   await api('/api/actions/test-uart',{method:'POST'});

@@ -17,6 +17,7 @@
 #include "mqtt_manager.h"
 #include "ota_manager.h"
 #include "rs232_reader.h"
+#include "spool_manager.h"
 #include "wifi_manager.h"
 
 extern const uint8_t index_html_start[] asm("_binary_index_html_start");
@@ -310,7 +311,22 @@ static esp_err_t handle_status(httpd_req_t *req)
     cJSON_AddNumberToObject(mqtt, "pub_ok", (double)m.mqtt_pub_ok);
     cJSON_AddNumberToObject(mqtt, "pub_err", (double)m.mqtt_pub_err);
     cJSON_AddNumberToObject(mqtt, "reconnects", (double)m.mqtt_reconnects);
+    cJSON_AddNumberToObject(mqtt, "server_ack_ok", (double)m.server_ack_ok);
+    cJSON_AddNumberToObject(mqtt, "server_nack", (double)m.server_nack_cnt);
+    cJSON_AddNumberToObject(mqtt, "crc_errors", (double)m.crc_error_cnt);
     cJSON_AddStringToObject(mqtt, "last_err", m.mqtt_last_err);
+
+    gw_spool_status_t sp;
+    spool_manager_get_status(&sp);
+    cJSON *spool = cJSON_AddObjectToObject(r, "spool");
+    cJSON_AddBoolToObject(spool, "mounted", sp.mounted);
+    cJSON_AddNumberToObject(spool, "total_bytes", (double)sp.total_bytes);
+    cJSON_AddNumberToObject(spool, "used_bytes", (double)sp.used_bytes);
+    cJSON_AddNumberToObject(spool, "pending_count", (double)sp.pending_count);
+    cJSON_AddNumberToObject(spool, "pending_bytes", (double)sp.pending_bytes);
+    cJSON_AddNumberToObject(spool, "active_seq", (double)sp.active_seq);
+    cJSON_AddStringToObject(spool, "sync_state", sp.sync_state);
+    cJSON_AddBoolToObject(spool, "require_server_ack", cfg.require_server_ack);
 
     cJSON *uart = cJSON_AddObjectToObject(r, "uart");
     cJSON_AddNumberToObject(uart, "baud", cfg.uart_baud);
@@ -376,6 +392,10 @@ static esp_err_t handle_get_config(httpd_req_t *req)
     cJSON_AddStringToObject(r, "topic_status", cfg.topic_status);
     cJSON_AddStringToObject(r, "topic_cmd", cfg.topic_cmd);
     cJSON_AddStringToObject(r, "topic_debug", cfg.topic_debug);
+    cJSON_AddStringToObject(r, "topic_ack", cfg.topic_ack);
+    cJSON_AddBoolToObject(r, "require_server_ack", cfg.require_server_ack);
+    cJSON_AddNumberToObject(r, "ack_timeout_ms", cfg.ack_timeout_ms);
+    cJSON_AddNumberToObject(r, "max_spool_files", cfg.max_spool_files);
 
     return send_json(req, "200 OK", r);
 }
@@ -453,6 +473,10 @@ static esp_err_t handle_post_config(httpd_req_t *req)
     json_copy_str(body, "topic_status", next.topic_status, sizeof(next.topic_status), false);
     json_copy_str(body, "topic_cmd", next.topic_cmd, sizeof(next.topic_cmd), false);
     json_copy_str(body, "topic_debug", next.topic_debug, sizeof(next.topic_debug), false);
+    json_copy_str(body, "topic_ack", next.topic_ack, sizeof(next.topic_ack), false);
+    if (cJSON_IsBool((it = cJSON_GetObjectItem(body, "require_server_ack")))) next.require_server_ack = cJSON_IsTrue(it);
+    if (cJSON_IsNumber((it = cJSON_GetObjectItem(body, "ack_timeout_ms")))) next.ack_timeout_ms = (uint32_t)it->valueint;
+    if (cJSON_IsNumber((it = cJSON_GetObjectItem(body, "max_spool_files")))) next.max_spool_files = (uint32_t)it->valueint;
 
     cJSON_Delete(body);
 
@@ -477,7 +501,7 @@ static esp_err_t handle_post_config(httpd_req_t *req)
                          prev.mqtt_port != next.mqtt_port || strcmp(prev.mqtt_client_id, next.mqtt_client_id) != 0 ||
                          strcmp(prev.mqtt_user, next.mqtt_user) != 0 || strcmp(prev.mqtt_pass, next.mqtt_pass) != 0 ||
                          prev.mqtt_keepalive != next.mqtt_keepalive || strcmp(prev.topic_status, next.topic_status) != 0 ||
-                         strcmp(prev.topic_cmd, next.topic_cmd) != 0);
+                         strcmp(prev.topic_cmd, next.topic_cmd) != 0 || strcmp(prev.topic_ack, next.topic_ack) != 0);
     if (mqtt_changed) {
         mqtt_manager_reconfigure();
     }
@@ -536,7 +560,20 @@ static esp_err_t handle_captures(httpd_req_t *req)
     cJSON *arr = cJSON_AddArrayToObject(r, "history");
     for (size_t i = 0; i < count; i++) {
         cJSON *it = cJSON_CreateObject();
+        char crc_str[10];
+        snprintf(crc_str, sizeof(crc_str), "%08lX", (unsigned long)hist[i].crc32);
+        const char *ack_str = "queued";
+        switch (hist[i].ack_state) {
+        case GW_ACK_WAIT_SERVER: ack_str = "wait_ack"; break;
+        case GW_ACK_OK: ack_str = "acked"; break;
+        case GW_ACK_NACK: ack_str = "nack"; break;
+        case GW_ACK_BROKER_ONLY: ack_str = "sent"; break;
+        default: break;
+        }
         cJSON_AddNumberToObject(it, "seq", (double)hist[i].seq);
+        cJSON_AddStringToObject(it, "crc32", crc_str);
+        cJSON_AddStringToObject(it, "ack_state", ack_str);
+        cJSON_AddNumberToObject(it, "attempts", hist[i].attempts);
         cJSON_AddNumberToObject(it, "timestamp_ms", (double)hist[i].timestamp_ms);
         cJSON_AddNumberToObject(it, "bytes", (double)hist[i].byte_len);
         cJSON_AddNumberToObject(it, "duration_ms", (double)hist[i].duration_ms);
@@ -835,6 +872,65 @@ static esp_err_t handle_ota_upload(httpd_req_t *req)
     return send_json(req, "200 OK", r);
 }
 
+static esp_err_t handle_spool_list(httpd_req_t *req)
+{
+    if (!is_authenticated(req)) {
+        return send_unauthorized(req);
+    }
+
+    gw_spool_status_t sp;
+    spool_manager_get_status(&sp);
+
+    gw_spool_item_t *items = (gw_spool_item_t *)calloc(32, sizeof(gw_spool_item_t));
+    size_t n = items ? spool_manager_list_pending(items, 32) : 0;
+
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddBoolToObject(r, "mounted", sp.mounted);
+    cJSON_AddNumberToObject(r, "total_bytes", (double)sp.total_bytes);
+    cJSON_AddNumberToObject(r, "used_bytes", (double)sp.used_bytes);
+    cJSON_AddNumberToObject(r, "pending_count", (double)sp.pending_count);
+    cJSON_AddNumberToObject(r, "pending_bytes", (double)sp.pending_bytes);
+    cJSON_AddNumberToObject(r, "active_seq", (double)sp.active_seq);
+    cJSON_AddStringToObject(r, "sync_state", sp.sync_state);
+
+    cJSON *arr = cJSON_AddArrayToObject(r, "items");
+    for (size_t i = 0; i < n; i++) {
+        cJSON *it = cJSON_CreateObject();
+        char crc_str[10];
+        snprintf(crc_str, sizeof(crc_str), "%08lX", (unsigned long)items[i].crc32);
+        cJSON_AddNumberToObject(it, "seq", (double)items[i].seq);
+        cJSON_AddStringToObject(it, "crc32", crc_str);
+        cJSON_AddNumberToObject(it, "bytes", (double)items[i].byte_len);
+        cJSON_AddNumberToObject(it, "timestamp_ms", (double)items[i].timestamp_ms);
+        cJSON_AddNumberToObject(it, "attempts", items[i].attempts);
+        cJSON_AddItemToArray(arr, it);
+    }
+    free(items);
+    return send_json(req, "200 OK", r);
+}
+
+static esp_err_t handle_sync_now(httpd_req_t *req)
+{
+    if (!is_authenticated(req)) {
+        return send_unauthorized(req);
+    }
+    spool_manager_trigger_sync();
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddBoolToObject(r, "ok", true);
+    return send_json(req, "200 OK", r);
+}
+
+static esp_err_t handle_purge_spool(httpd_req_t *req)
+{
+    if (!is_authenticated(req)) {
+        return send_unauthorized(req);
+    }
+    esp_err_t err = spool_manager_purge_all();
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddBoolToObject(r, "ok", err == ESP_OK);
+    return send_json(req, "200 OK", r);
+}
+
 static esp_err_t handle_factory_reset(httpd_req_t *req)
 {
     if (!is_authenticated(req)) {
@@ -879,6 +975,9 @@ esp_err_t web_server_start(void)
         {.uri = "/api/ota/status", .method = HTTP_GET, .handler = handle_ota_status},
         {.uri = "/api/ota/url", .method = HTTP_POST, .handler = handle_ota_url},
         {.uri = "/api/ota/upload", .method = HTTP_POST, .handler = handle_ota_upload},
+        {.uri = "/api/spool", .method = HTTP_GET, .handler = handle_spool_list},
+        {.uri = "/api/actions/sync-now", .method = HTTP_POST, .handler = handle_sync_now},
+        {.uri = "/api/actions/purge-spool", .method = HTTP_POST, .handler = handle_purge_spool},
     };
 
     for (size_t i = 0; i < sizeof(routes) / sizeof(routes[0]); i++) {

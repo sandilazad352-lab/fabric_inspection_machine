@@ -9,7 +9,7 @@
 #include "nvs_flash.h"
 
 #define NVS_NAMESPACE   "gw_cfg"
-#define NVS_KEY_BLOB    "config_v1"
+#define NVS_KEY_BLOB    "config_v2"
 #define CONFIG_MAGIC    0x46494757U /* "FIGW" */
 
 typedef struct {
@@ -86,6 +86,11 @@ static void load_defaults(gw_config_t *cfg)
     snprintf(cfg->topic_status, sizeof(cfg->topic_status), "factory/inspection/%s/status", cfg->device_id);
     snprintf(cfg->topic_cmd, sizeof(cfg->topic_cmd), "factory/inspection/%s/cmd", cfg->device_id);
     snprintf(cfg->topic_debug, sizeof(cfg->topic_debug), "factory/inspection/%s/debug", cfg->device_id);
+    snprintf(cfg->topic_ack, sizeof(cfg->topic_ack), "factory/inspection/%s/ack", cfg->device_id);
+
+    cfg->require_server_ack = true;
+    cfg->ack_timeout_ms = 10000;
+    cfg->max_spool_files = 100;
 }
 
 static void clamp_config(gw_config_t *cfg)
@@ -138,6 +143,12 @@ static void clamp_config(gw_config_t *cfg)
     if (cfg->ap_ssid[0] == '\0') {
         app_config_safe_copy(cfg->ap_ssid, sizeof(cfg->ap_ssid), "FI-Gateway-Setup");
     }
+    if (cfg->ack_timeout_ms < 1000 || cfg->ack_timeout_ms > 120000) {
+        cfg->ack_timeout_ms = 10000;
+    }
+    if (cfg->max_spool_files < 5 || cfg->max_spool_files > 120) {
+        cfg->max_spool_files = 100;
+    }
 }
 
 static esp_err_t save_to_nvs_locked(const gw_config_t *cfg)
@@ -150,7 +161,7 @@ static esp_err_t save_to_nvs_locked(const gw_config_t *cfg)
 
     persisted_config_t blob = {
         .magic = CONFIG_MAGIC,
-        .version = 1,
+        .version = 2,
         .cfg = *cfg,
     };
 
@@ -171,15 +182,27 @@ esp_err_t app_config_init(void)
     load_defaults(&s_cfg);
 
     nvs_handle_t handle;
-    if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &handle) == ESP_OK) {
+    if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &handle) == ESP_OK) {
         persisted_config_t blob;
         size_t sz = sizeof(blob);
         if (nvs_get_blob(handle, NVS_KEY_BLOB, &blob, &sz) == ESP_OK &&
             sz == sizeof(blob) &&
             blob.magic == CONFIG_MAGIC &&
-            blob.version == 1) {
+            blob.version == 2) {
             s_cfg = blob.cfg;
             clamp_config(&s_cfg);
+        } else {
+            /* Migrate v1 config prefix if present so existing Wi-Fi/MQTT settings are preserved */
+            persisted_config_t v1_blob = {.magic = 0, .version = 0, .cfg = s_cfg};
+            size_t v1_sz = sizeof(v1_blob);
+            if (nvs_get_blob(handle, "config_v1", &v1_blob, &v1_sz) == ESP_OK &&
+                v1_sz > 8 && v1_sz <= sizeof(v1_blob) &&
+                v1_blob.magic == CONFIG_MAGIC &&
+                v1_blob.version == 1) {
+                s_cfg = v1_blob.cfg;
+                clamp_config(&s_cfg);
+                save_to_nvs_locked(&s_cfg);
+            }
         }
         nvs_close(handle);
     }

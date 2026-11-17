@@ -45,6 +45,7 @@ Complete integration and API specification for the **ESP32-C5 RS-232-to-MQTT Ind
 | Purpose | Direction | Default Topic | Retain |
 | :--- | :--- | :--- | :--- |
 | Inspection HEX Frame | Gateway -> Broker | `factory/inspection/<device_id>/hex` | Configurable (`false`) |
+| Server ACK / NACK | Broker -> Gateway | `factory/inspection/<device_id>/ack` | `false` |
 | Online / Offline Status | Gateway -> Broker | `factory/inspection/<device_id>/status` | `true` |
 | Remote Command | Broker -> Gateway | `factory/inspection/<device_id>/cmd` | `false` |
 | Debug Log Topic | Configurable | `factory/inspection/<device_id>/debug` | `false` |
@@ -61,6 +62,10 @@ Depending on `mqtt_format` (`0`, `1`, or `2`):
   "device_name": "FI-Inspection-Gateway",
   "location": "Inspection-Line-1",
   "seq": 1,
+  "crc32": "A1B2C3D4",
+  "ack_required": true,
+  "ack_topic": "factory/inspection/fi-gw-e011d8/ack",
+  "attempt": 1,
   "timestamp_ms": 71841,
   "bytes": 10340,
   "duration_ms": 11760,
@@ -83,7 +88,11 @@ Depending on `mqtt_format` (`0`, `1`, or `2`):
 | Field | Type | Description |
 | :--- | :--- | :--- |
 | `device_id`, `device_name`, `location` | `string` | Gateway identity configured in NVS |
-| `seq` | `number` | Monotonic frame sequence number since boot |
+| `seq` | `number` | Persistent NVS-backed monotonic frame sequence number |
+| `crc32` | `string` | Standard IEEE 802.3 CRC-32 (8-char uppercase hex of raw bytes, matches Python `f"{zlib.crc32(raw) & 0xFFFFFFFF:08X}"`) |
+| `ack_required` | `boolean` | When `true`, gateway keeps frame in `/spool` flash until backend confirms receipt on `ack_topic` |
+| `ack_topic` | `string` | Topic where backend must publish ACK/NACK JSON |
+| `attempt` | `number` | Delivery attempt counter (`1..250`) |
 | `timestamp_ms` | `number` | Device uptime timestamp in milliseconds |
 | `bytes` | `number` | Raw UART bytes captured (`1..32768`) |
 | `duration_ms` | `number` | Duration from first byte to last byte |
@@ -126,11 +135,28 @@ Last Will and Testament (LWT) on unexpected disconnect (`retain = true`):
 {"status":"offline","device_id":"fi-gw-e011d8"}
 ```
 
-### 2.4 Remote Commands (`topic_cmd`)
+### 2.4 Server-Side CRC Verification & ACK Handshake (`topic_ack`)
+
+When `require_server_ack` is enabled (default `true`), every RS-232 capture is persisted to the `1.5 MB` SPIFFS flash partition (`/spool`) before transmission and stays queued across Wi-Fi/MQTT outages or power loss until the backend confirms receipt:
+
+1. **Backend verifies CRC-32** on the received `hex` payload:
+   ```python
+   import zlib
+   raw = bytes.fromhex(msg["hex"])
+   calc_crc = f"{zlib.crc32(raw) & 0xFFFFFFFF:08X}"
+   valid = (calc_crc == msg["crc32"])
+   ```
+2. **Backend publishes ACK/NACK** to `msg["ack_topic"]` (`factory/inspection/<device_id>/ack`):
+   * **Success:** `{"seq": 1, "status": "ok", "crc32": "A1B2C3D4"}` *(or `{"seq": 1, "ack": true}`)*
+   * **CRC / DB Error (triggers immediate retry):** `{"seq": 1, "status": "nack", "reason": "crc_mismatch"}`
+3. If Wi-Fi or MQTT is offline, frames accumulate safely in `/spool` (up to `max_spool_files`, default `100`). As soon as connectivity returns, `spool_sync` automatically replays oldest-first, verifies flash CRC-32 before each publish, awaits server ACK, and deletes each file only after confirmation.
+
+### 2.5 Remote Commands (`topic_cmd`)
 
 Publish any string containing one of these command tokens to `topic_cmd`:
 * `"status"` or `"ping"` — Immediately publishes a fresh `online` status JSON to `topic_status`.
-* `"test_uart"` — Injects a synthetic 4-stripe ESC/P test receipt through the capture & MQTT pipeline.
+* `"sync"` — Triggers immediate offline spool synchronization.
+* `"test_uart"` — Injects a synthetic 4-stripe ESC/P test receipt through the capture, spool, & MQTT pipeline.
 * `"reboot"` — Restarts the ESP32-C5 (`esp_restart()`).
 * `"ota:<url>"` or `{"cmd":"ota","url":"http://..."}` — Triggers background HTTP/HTTPS OTA firmware update and reboots on verification.
 
@@ -348,6 +374,9 @@ Runs an active Wi-Fi scan and returns:
 | `POST /api/actions/test-uart` | Injects a synthetic 4-stripe ESC/P receipt into capture + MQTT |
 | `POST /api/actions/reboot` | Responds `{"ok":true}` and reboots ESP32-C5 after `450ms` |
 | `POST /api/actions/factory-reset` | Restores NVS defaults (`admin`/`admin1234`) and reboots |
+| `POST /api/actions/sync-now` | Immediately wakes the background flash spool sync task |
+| `POST /api/actions/purge-spool` | Deletes all pending queued frames from `/spool` |
+| `GET /api/spool` | Returns SPIFFS usage + list of pending frames (`seq`, `crc32`, `bytes`, `attempts`) |
 
 ---
 
