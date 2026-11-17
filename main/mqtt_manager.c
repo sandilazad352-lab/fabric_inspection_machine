@@ -12,6 +12,7 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "mqtt_client.h"
+#include "ota_manager.h"
 #include "rs232_reader.h"
 #include "wifi_manager.h"
 
@@ -30,12 +31,30 @@ static void handle_cmd_payload(const char *data, int len)
     if (!data || len <= 0) {
         return;
     }
-    char cmd_buf[192];
+    char cmd_buf[384];
     int copy_len = len < (int)sizeof(cmd_buf) - 1 ? len : (int)sizeof(cmd_buf) - 1;
     memcpy(cmd_buf, data, copy_len);
     cmd_buf[copy_len] = '\0';
 
     ESP_LOGI(TAG, "Received MQTT cmd: %s", cmd_buf);
+
+    if (strncmp(cmd_buf, "ota:", 4) == 0) {
+        ota_manager_start_url(cmd_buf + 4);
+        return;
+    }
+    if (cmd_buf[0] == '{') {
+        cJSON *obj = cJSON_Parse(cmd_buf);
+        if (obj) {
+            const cJSON *cmd = cJSON_GetObjectItem(obj, "cmd");
+            const cJSON *url = cJSON_GetObjectItem(obj, "url");
+            if (cJSON_IsString(cmd) && strcmp(cmd->valuestring, "ota") == 0 && cJSON_IsString(url)) {
+                ota_manager_start_url(url->valuestring);
+                cJSON_Delete(obj);
+                return;
+            }
+            cJSON_Delete(obj);
+        }
+    }
 
     if (strstr(cmd_buf, "reboot") != NULL) {
         ESP_LOGW(TAG, "Reboot requested via MQTT cmd");
@@ -222,32 +241,38 @@ bool mqtt_manager_publish_status(const char *state_label)
 
 bool mqtt_manager_publish_capture(const gw_capture_meta_t *meta, const uint8_t *raw_data, size_t raw_len)
 {
-    gw_config_t cfg;
-    app_config_get(&cfg);
-    if (!cfg.mqtt_enabled || !s_connected || !s_client || cfg.topic_hex[0] == '\0' || !raw_data || raw_len == 0) {
+    gw_config_t *cfg = (gw_config_t *)malloc(sizeof(gw_config_t));
+    if (!cfg) {
+        return false;
+    }
+    app_config_get(cfg);
+    if (!cfg->mqtt_enabled || !s_connected || !s_client || cfg->topic_hex[0] == '\0' || !raw_data || raw_len == 0) {
         ESP_LOGW(TAG, "Skip MQTT publish (enabled=%d, connected=%d, topic='%s', len=%zu)",
-                 cfg.mqtt_enabled, s_connected, cfg.topic_hex, raw_len);
+                 cfg->mqtt_enabled, s_connected, cfg->topic_hex, raw_len);
+        free(cfg);
         return false;
     }
 
     int msg_id = -1;
-    if (cfg.mqtt_format == GW_MQTT_FMT_RAW_BIN) {
-        msg_id = esp_mqtt_client_publish(s_client, cfg.topic_hex, (const char *)raw_data, (int)raw_len,
-                                           cfg.mqtt_qos, cfg.mqtt_retain ? 1 : 0);
-        if (msg_id < 0 && cfg.mqtt_qos > 0) {
-            msg_id = esp_mqtt_client_publish(s_client, cfg.topic_hex, (const char *)raw_data, (int)raw_len,
-                                               0, cfg.mqtt_retain ? 1 : 0);
+    if (cfg->mqtt_format == GW_MQTT_FMT_RAW_BIN) {
+        msg_id = esp_mqtt_client_publish(s_client, cfg->topic_hex, (const char *)raw_data, (int)raw_len,
+                                           cfg->mqtt_qos, cfg->mqtt_retain ? 1 : 0);
+        if (msg_id < 0 && cfg->mqtt_qos > 0) {
+            msg_id = esp_mqtt_client_publish(s_client, cfg->topic_hex, (const char *)raw_data, (int)raw_len,
+                                               0, cfg->mqtt_retain ? 1 : 0);
         }
+        free(cfg);
         return msg_id >= 0;
     }
 
     static const char hex_lut[] = "0123456789ABCDEF";
 
-    if (cfg.mqtt_format == GW_MQTT_FMT_RAW_HEX) {
+    if (cfg->mqtt_format == GW_MQTT_FMT_RAW_HEX) {
         char *hex_str = (char *)malloc(raw_len * 2 + 1);
         if (!hex_str) {
             ESP_LOGE(TAG, "OOM allocating %zu-byte raw HEX buffer (free=%lu)",
                      raw_len * 2 + 1, (unsigned long)esp_get_free_heap_size());
+            free(cfg);
             return false;
         }
         for (size_t i = 0; i < raw_len; i++) {
@@ -256,33 +281,38 @@ bool mqtt_manager_publish_capture(const gw_capture_meta_t *meta, const uint8_t *
         }
         hex_str[raw_len * 2] = '\0';
 
-        msg_id = esp_mqtt_client_publish(s_client, cfg.topic_hex, hex_str, (int)(raw_len * 2),
-                                           cfg.mqtt_qos, cfg.mqtt_retain ? 1 : 0);
-        if (msg_id < 0 && cfg.mqtt_qos > 0) {
-            ESP_LOGW(TAG, "QoS%u outbox full, retrying QoS0", (unsigned)cfg.mqtt_qos);
-            msg_id = esp_mqtt_client_publish(s_client, cfg.topic_hex, hex_str, (int)(raw_len * 2),
-                                               0, cfg.mqtt_retain ? 1 : 0);
+        msg_id = esp_mqtt_client_publish(s_client, cfg->topic_hex, hex_str, (int)(raw_len * 2),
+                                           cfg->mqtt_qos, cfg->mqtt_retain ? 1 : 0);
+        if (msg_id < 0 && cfg->mqtt_qos > 0) {
+            ESP_LOGW(TAG, "QoS%u outbox full, retrying QoS0", (unsigned)cfg->mqtt_qos);
+            msg_id = esp_mqtt_client_publish(s_client, cfg->topic_hex, hex_str, (int)(raw_len * 2),
+                                               0, cfg->mqtt_retain ? 1 : 0);
         }
         free(hex_str);
         if (msg_id >= 0) {
             ESP_LOGI(TAG, "Published raw HEX frame #%lu (%zu bytes) to %s",
-                     (unsigned long)meta->seq, raw_len, cfg.topic_hex);
+                     (unsigned long)meta->seq, raw_len, cfg->topic_hex);
         } else {
             ESP_LOGE(TAG, "Failed publishing raw HEX frame #%lu", (unsigned long)meta->seq);
         }
+        free(cfg);
         return msg_id >= 0;
     }
 
-    /* Single-buffer JSON+HEX envelope to minimize peak heap usage */
-    char header[512];
+    /* Single-buffer JSON+HEX envelope to minimize peak heap & stack usage */
+    char *header = (char *)malloc(512);
+    if (!header) {
+        free(cfg);
+        return false;
+    }
     int hlen = snprintf(
-        header, sizeof(header),
+        header, 512,
         "{\"device_id\":\"%s\",\"device_name\":\"%s\",\"location\":\"%s\","
         "\"seq\":%lu,\"timestamp_ms\":%lld,\"bytes\":%zu,\"duration_ms\":%lu,"
         "\"rate_bps\":%lu,\"esc_k_count\":%zu,\"raster_stripes\":%zu,\"reason\":\"%s\","
         "\"commands\":{\"esc_at\":%s,\"esc_k\":%s,\"cr\":%s,\"lf\":%s,\"esc_l\":%s,\"esc_1\":%s},"
         "\"hex\":\"",
-        cfg.device_id, cfg.device_name, cfg.location,
+        cfg->device_id, cfg->device_name, cfg->location,
         (unsigned long)meta->seq, (long long)meta->timestamp_ms, meta->byte_len,
         (unsigned long)meta->duration_ms, (unsigned long)meta->rate_bps,
         meta->esc_k_count, meta->raster_stripes, meta->end_reason,
@@ -293,8 +323,10 @@ bool mqtt_manager_publish_capture(const gw_capture_meta_t *meta, const uint8_t *
         meta->found_esc_l ? "true" : "false",
         meta->found_esc_1 ? "true" : "false"
     );
-    if (hlen <= 0 || (size_t)hlen >= sizeof(header)) {
+    if (hlen <= 0 || hlen >= 512) {
         ESP_LOGE(TAG, "JSON header overflow");
+        free(header);
+        free(cfg);
         return false;
     }
 
@@ -303,10 +335,13 @@ bool mqtt_manager_publish_capture(const gw_capture_meta_t *meta, const uint8_t *
     if (!payload) {
         ESP_LOGE(TAG, "OOM allocating %zu-byte MQTT payload (free=%lu)",
                  total_len + 1, (unsigned long)esp_get_free_heap_size());
+        free(header);
+        free(cfg);
         return false;
     }
 
     memcpy(payload, header, (size_t)hlen);
+    free(header);
     char *p = payload + hlen;
     for (size_t i = 0; i < raw_len; i++) {
         *p++ = hex_lut[(raw_data[i] >> 4) & 0x0F];
@@ -316,22 +351,23 @@ bool mqtt_manager_publish_capture(const gw_capture_meta_t *meta, const uint8_t *
     *p++ = '}';
     *p = '\0';
 
-    msg_id = esp_mqtt_client_publish(s_client, cfg.topic_hex, payload, (int)total_len,
-                                       cfg.mqtt_qos, cfg.mqtt_retain ? 1 : 0);
-    if (msg_id < 0 && cfg.mqtt_qos > 0) {
-        ESP_LOGW(TAG, "MQTT QoS%u publish failed (%zu bytes), retrying QoS0", (unsigned)cfg.mqtt_qos, total_len);
-        msg_id = esp_mqtt_client_publish(s_client, cfg.topic_hex, payload, (int)total_len,
-                                           0, cfg.mqtt_retain ? 1 : 0);
+    msg_id = esp_mqtt_client_publish(s_client, cfg->topic_hex, payload, (int)total_len,
+                                       cfg->mqtt_qos, cfg->mqtt_retain ? 1 : 0);
+    if (msg_id < 0 && cfg->mqtt_qos > 0) {
+        ESP_LOGW(TAG, "MQTT QoS%u publish failed (%zu bytes), retrying QoS0", (unsigned)cfg->mqtt_qos, total_len);
+        msg_id = esp_mqtt_client_publish(s_client, cfg->topic_hex, payload, (int)total_len,
+                                           0, cfg->mqtt_retain ? 1 : 0);
     }
     free(payload);
 
     if (msg_id >= 0) {
         ESP_LOGI(TAG, "Published frame #%lu (%zu bytes, payload=%zu B) to %s",
-                 (unsigned long)meta->seq, raw_len, total_len, cfg.topic_hex);
+                 (unsigned long)meta->seq, raw_len, total_len, cfg->topic_hex);
     } else {
         ESP_LOGE(TAG, "Failed publishing frame #%lu (%zu B) to %s",
-                 (unsigned long)meta->seq, total_len, cfg.topic_hex);
+                 (unsigned long)meta->seq, total_len, cfg->topic_hex);
     }
+    free(cfg);
     return msg_id >= 0;
 }
 

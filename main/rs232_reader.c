@@ -226,18 +226,28 @@ static void rs232_task(void *arg)
 {
     (void)arg;
     static const char hex_lut[] = "0123456789ABCDEF";
-    uint8_t rx_buf[READ_CHUNK_SIZE];
-    char out_buf[READ_CHUNK_SIZE * 2 + (READ_CHUNK_SIZE * 2 / HEX_LINE_CHARS) + 4];
+    uint8_t *rx_buf = (uint8_t *)malloc(READ_CHUNK_SIZE);
+    const size_t out_buf_sz = READ_CHUNK_SIZE * 2 + (READ_CHUNK_SIZE * 2 / HEX_LINE_CHARS) + 4;
+    char *out_buf = (char *)malloc(out_buf_sz);
+    gw_config_t *cfg = (gw_config_t *)malloc(sizeof(gw_config_t));
+
+    if (!rx_buf || !out_buf || !cfg) {
+        ESP_LOGE(TAG, "OOM initializing rs232_task buffers");
+        free(rx_buf);
+        free(out_buf);
+        free(cfg);
+        vTaskDelete(NULL);
+        return;
+    }
 
     rx_capture_t st = {0};
 
     while (1) {
-        gw_config_t cfg;
-        app_config_get(&cfg);
+        app_config_get(cfg);
 
         int len = 0;
         if (xSemaphoreTake(s_uart_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-            len = uart_read_bytes(RS232_UART_PORT, rx_buf, sizeof(rx_buf), pdMS_TO_TICKS(READ_TIMEOUT_MS));
+            len = uart_read_bytes(RS232_UART_PORT, rx_buf, READ_CHUNK_SIZE, pdMS_TO_TICKS(READ_TIMEOUT_MS));
             xSemaphoreGive(s_uart_mutex);
         } else {
             vTaskDelay(pdMS_TO_TICKS(20));
@@ -249,7 +259,7 @@ static void rs232_task(void *arg)
         if (len > 0) {
             if (!st.active) {
                 reset_capture(&st, now_us);
-                if (cfg.serial_echo_hex) {
+                if (cfg->serial_echo_hex) {
                     printf("\n--- CAPTURE START ---\n");
                 }
             }
@@ -258,7 +268,7 @@ static void rs232_task(void *arg)
             for (int i = 0; i < len; i++) {
                 uint8_t b = rx_buf[i];
                 analyze_byte(&st, b);
-                if (cfg.serial_echo_hex) {
+                if (cfg->serial_echo_hex) {
                     out_buf[out_pos++] = hex_lut[(b >> 4) & 0x0F];
                     out_buf[out_pos++] = hex_lut[b & 0x0F];
                     st.col_chars += 2;
@@ -269,18 +279,18 @@ static void rs232_task(void *arg)
                 }
                 st.total_bytes++;
             }
-            if (cfg.serial_echo_hex && out_pos > 0) {
+            if (cfg->serial_echo_hex && out_pos > 0) {
                 fwrite(out_buf, 1, out_pos, stdout);
                 fflush(stdout);
             }
 
             st.last_rx_us = now_us;
-            if (st.total_bytes >= cfg.max_capture_bytes) {
-                finalize_capture(&st, &cfg, "max_bytes");
+            if (st.total_bytes >= cfg->max_capture_bytes) {
+                finalize_capture(&st, cfg, "max_bytes");
             }
         } else if (st.active) {
-            if ((now_us - st.last_rx_us) >= ((int64_t)cfg.idle_timeout_ms * 1000LL)) {
-                finalize_capture(&st, &cfg, "idle_gap");
+            if ((now_us - st.last_rx_us) >= ((int64_t)cfg->idle_timeout_ms * 1000LL)) {
+                finalize_capture(&st, cfg, "idle_gap");
             }
         }
     }
@@ -338,6 +348,6 @@ esp_err_t rs232_reader_init(void)
         s_uart_mutex = xSemaphoreCreateMutex();
     }
     ESP_ERROR_CHECK(rs232_reader_reconfigure());
-    xTaskCreate(rs232_task, "rs232_task", 5120, NULL, 10, NULL);
+    xTaskCreate(rs232_task, "rs232_task", 8192, NULL, 10, NULL);
     return ESP_OK;
 }

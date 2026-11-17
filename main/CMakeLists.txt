@@ -5,6 +5,7 @@ idf_component_register(
         "gateway_state.c"
         "wifi_manager.c"
         "mqtt_manager.c"
+        "ota_manager.c"
         "rs232_reader.c"
         "web_server.c"
     INCLUDE_DIRS "."

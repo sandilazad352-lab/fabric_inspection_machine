@@ -444,6 +444,39 @@ canvas{image-rendering:pixelated;max-width:100%;border:1px solid var(--border2)}
             </div>
           </div>
         </div>
+
+        <div class="card" style="margin-top:16px">
+          <div class="card-head">
+            <div class="card-title">Firmware OTA Update (Dual-Slot Rollback Enabled)</div>
+            <span class="badge mono" id="otaSlotBadge">slot: --</span>
+          </div>
+          <div class="card-body">
+            <div class="grid-2">
+              <div>
+                <div class="field"><label>Upload Compiled Firmware (.bin)</label>
+                  <input class="input" type="file" id="otaFile" accept=".bin">
+                </div>
+                <button class="btn btn-primary" onclick="uploadOtaFile()">Upload &amp; Flash OTA</button>
+              </div>
+              <div>
+                <div class="field"><label>Remote Firmware URL (HTTP / HTTPS)</label>
+                  <input class="input mono" id="otaUrl" placeholder="http://172.16.16.4:8000/fi_hex_json.bin">
+                </div>
+                <button class="btn" onclick="startUrlOta()">Pull &amp; Flash from URL</button>
+              </div>
+            </div>
+            <div style="margin-top:14px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:10px 12px">
+              <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:6px">
+                <span class="mono" id="otaStatusText">Status: idle</span>
+                <span class="mono" id="otaPctText">0%</span>
+              </div>
+              <div style="height:8px;background:#0a0e14;border-radius:4px;overflow:hidden">
+                <div id="otaBar" style="height:100%;width:0%;background:var(--accent);transition:width .2s"></div>
+              </div>
+              <div class="small muted mono" id="otaMetaText" style="margin-top:6px"></div>
+            </div>
+          </div>
+        </div>
       </section>
     </main>
   </div>
@@ -548,6 +581,7 @@ document.querySelectorAll('.nav-btn').forEach(btn=>{
 
 async function initDashboard(){
   await loadConfig();
+  await loadOtaStatus();
   await refreshAll();
   if(!window._poll){
     window._poll=setInterval(refreshStatusAndLogs,2000);
@@ -827,6 +861,67 @@ function exportConfig(){
 }
 async function rebootDevice(){if(confirm('Reboot ESP32-C5 gateway now?')){await api('/api/actions/reboot',{method:'POST'});toast('Rebooting gateway...');}}
 async function factoryReset(){if(confirm('Reset all NVS Wi-Fi, MQTT & Admin settings to factory defaults?')){await api('/api/actions/factory-reset',{method:'POST'});toast('Factory reset complete, rebooting...');}}
+
+async function loadOtaStatus(){
+  try{
+    const o=await api('/api/ota/status');
+    $('otaSlotBadge').textContent=`running: ${o.running_partition} -> next: ${o.next_partition}`;
+    $('otaMetaText').textContent=`Build: v${o.app_version} (${o.compile_date} ${o.compile_time})`+(o.last_error?` | Err: ${o.last_error}`:'');
+    const pct=o.total_bytes>0?Math.min(100,Math.round((o.bytes_written/o.total_bytes)*100)):0;
+    $('otaStatusText').textContent=`Status: ${o.state}`+(o.bytes_written?` (${o.bytes_written}/${o.total_bytes||'?'} B)`:'');
+    $('otaPctText').textContent=pct+'%';
+    $('otaBar').style.width=pct+'%';
+    return o;
+  }catch(e){return null;}
+}
+
+function uploadOtaFile(){
+  const f=$('otaFile').files[0];
+  if(!f){toast('Select a .bin firmware file first',true);return;}
+  if(!confirm(`Flash ${f.name} (${f.size} bytes) via OTA and reboot?`)) return;
+  const xhr=new XMLHttpRequest();
+  xhr.open('POST','/api/ota/upload',true);
+  if(authToken) xhr.setRequestHeader('X-Auth-Token',authToken);
+  xhr.setRequestHeader('Content-Type','application/octet-stream');
+  xhr.upload.onprogress=e=>{
+    if(e.lengthComputable){
+      const pct=Math.round((e.loaded/e.total)*100);
+      $('otaStatusText').textContent=`Status: uploading (${e.loaded}/${e.total} B)`;
+      $('otaPctText').textContent=pct+'%';
+      $('otaBar').style.width=pct+'%';
+    }
+  };
+  xhr.onload=()=>{
+    try{
+      const r=JSON.parse(xhr.responseText||'{}');
+      if(xhr.status===200 && r.ok){
+        $('otaStatusText').textContent=`Status: rebooting into ${r.target_partition}...`;
+        toast('OTA upload complete! Gateway rebooting...');
+        setTimeout(()=>location.reload(),8000);
+      }else{
+        toast(r.error||'OTA upload failed',true);
+        loadOtaStatus();
+      }
+    }catch(err){toast('OTA response error',true);}
+  };
+  xhr.onerror=()=>{toast('OTA upload network error',true);};
+  xhr.send(f);
+}
+
+async function startUrlOta(){
+  const url=$('otaUrl').value.trim();
+  if(!url){toast('Enter HTTP/HTTPS .bin URL',true);return;}
+  try{
+    const r=await api('/api/ota/url',{method:'POST',body:JSON.stringify({url})});
+    if(!r.ok){toast(r.error||'Failed to start URL OTA',true);return;}
+    toast('URL OTA started...');
+    const t=setInterval(async()=>{
+      const o=await loadOtaStatus();
+      if(!o || o.state==='rebooting'){clearInterval(t);toast('OTA complete! Rebooting...');setTimeout(()=>location.reload(),8000);}
+      else if(o.state==='error'||o.state==='idle'){clearInterval(t);}
+    },1000);
+  }catch(e){toast('URL OTA failed',true);}
+}
 
 boot();
 </script>

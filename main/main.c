@@ -4,6 +4,7 @@
 #include "gateway_state.h"
 #include "mqtt_manager.h"
 #include "nvs_flash.h"
+#include "ota_manager.h"
 #include "rs232_reader.h"
 #include "web_server.h"
 #include "wifi_manager.h"
@@ -20,6 +21,7 @@ void app_main(void)
     ESP_ERROR_CHECK(ret);
 
     gateway_state_init();
+    ota_manager_init();
     ESP_ERROR_CHECK(app_config_init());
 
     gw_config_t cfg;
@@ -32,6 +34,7 @@ void app_main(void)
     ESP_ERROR_CHECK(mqtt_manager_init());
     ESP_ERROR_CHECK(rs232_reader_init());
     ESP_ERROR_CHECK(web_server_start());
+    ota_manager_mark_valid();
 
     ESP_LOGI(TAG, "Gateway ready (AP SSID: %s, Web UI: http://192.168.4.1/)", cfg.ap_ssid);
 }

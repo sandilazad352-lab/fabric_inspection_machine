@@ -132,6 +132,7 @@ Publish any string containing one of these command tokens to `topic_cmd`:
 * `"status"` or `"ping"` — Immediately publishes a fresh `online` status JSON to `topic_status`.
 * `"test_uart"` — Injects a synthetic 4-stripe ESC/P test receipt through the capture & MQTT pipeline.
 * `"reboot"` — Restarts the ESP32-C5 (`esp_restart()`).
+* `"ota:<url>"` or `{"cmd":"ota","url":"http://..."}` — Triggers background HTTP/HTTPS OTA firmware update and reboots on verification.
 
 ---
 
@@ -347,6 +348,16 @@ Runs an active Wi-Fi scan and returns:
 | `POST /api/actions/test-uart` | Injects a synthetic 4-stripe ESC/P receipt into capture + MQTT |
 | `POST /api/actions/reboot` | Responds `{"ok":true}` and reboots ESP32-C5 after `450ms` |
 | `POST /api/actions/factory-reset` | Restores NVS defaults (`admin`/`admin1234`) and reboots |
+
+---
+
+### 4.5 OTA Firmware Update Endpoints
+
+Dual-slot OTA partitions (`ota_0`, `ota_1`, `3M` each) with automatic rollback (`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y`).
+
+* **`GET /api/ota/status`** — Returns `state` (`"idle"`, `"downloading"`, `"uploading"`, `"verifying"`, `"rebooting"`, `"error"`), `running_partition`, `next_partition`, `app_version`, `compile_date`, `compile_time`, `pending_verify`, `bytes_written`, `total_bytes`, `last_error`.
+* **`POST /api/ota/url`** — Body `{"url":"http://host/fi_hex_json.bin"}` (supports HTTP and HTTPS). Downloads, verifies, updates boot partition, and reboots.
+* **`POST /api/ota/upload`** — Body raw `.bin` binary (`Content-Type: application/octet-stream`). Streams directly into passive OTA slot, validates image, sets boot partition, and reboots.
 
 ---
 

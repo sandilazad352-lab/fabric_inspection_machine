@@ -15,6 +15,7 @@
 #include "freertos/task.h"
 #include "gateway_state.h"
 #include "mqtt_manager.h"
+#include "ota_manager.h"
 #include "rs232_reader.h"
 #include "wifi_manager.h"
 
@@ -699,6 +700,141 @@ static esp_err_t handle_reboot(httpd_req_t *req)
     return err;
 }
 
+static esp_err_t handle_ota_status(httpd_req_t *req)
+{
+    if (!is_authenticated(req)) {
+        return send_unauthorized(req);
+    }
+
+    gw_ota_info_t info;
+    ota_manager_get_info(&info);
+
+    const char *state_str = "idle";
+    switch (info.state) {
+    case GW_OTA_DOWNLOADING: state_str = "downloading"; break;
+    case GW_OTA_UPLOADING: state_str = "uploading"; break;
+    case GW_OTA_VERIFYING: state_str = "verifying"; break;
+    case GW_OTA_REBOOTING: state_str = "rebooting"; break;
+    case GW_OTA_ERROR: state_str = "error"; break;
+    default: break;
+    }
+
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddStringToObject(r, "state", state_str);
+    cJSON_AddStringToObject(r, "running_partition", info.running_partition);
+    cJSON_AddStringToObject(r, "next_partition", info.next_partition);
+    cJSON_AddStringToObject(r, "app_version", info.app_version);
+    cJSON_AddStringToObject(r, "compile_date", info.compile_date);
+    cJSON_AddStringToObject(r, "compile_time", info.compile_time);
+    cJSON_AddBoolToObject(r, "pending_verify", info.pending_verify);
+    cJSON_AddNumberToObject(r, "bytes_written", (double)info.bytes_written);
+    cJSON_AddNumberToObject(r, "total_bytes", (double)info.total_bytes);
+    cJSON_AddStringToObject(r, "last_error", info.last_error);
+    return send_json(req, "200 OK", r);
+}
+
+static esp_err_t handle_ota_url(httpd_req_t *req)
+{
+    if (!is_authenticated(req)) {
+        return send_unauthorized(req);
+    }
+
+    cJSON *body = read_json_body(req);
+    if (!body) {
+        cJSON *err = cJSON_CreateObject();
+        cJSON_AddBoolToObject(err, "ok", false);
+        cJSON_AddStringToObject(err, "error", "Invalid JSON");
+        return send_json(req, "400 Bad Request", err);
+    }
+
+    const cJSON *url = cJSON_GetObjectItem(body, "url");
+    esp_err_t err_code = ESP_ERR_INVALID_ARG;
+    if (cJSON_IsString(url)) {
+        err_code = ota_manager_start_url(url->valuestring);
+    }
+    cJSON_Delete(body);
+
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddBoolToObject(r, "ok", err_code == ESP_OK);
+    if (err_code != ESP_OK) {
+        cJSON_AddStringToObject(r, "error", esp_err_to_name(err_code));
+        return send_json(req, "400 Bad Request", r);
+    }
+    return send_json(req, "200 OK", r);
+}
+
+static esp_err_t handle_ota_upload(httpd_req_t *req)
+{
+    if (!is_authenticated(req)) {
+        return send_unauthorized(req);
+    }
+
+    if (req->content_len <= 0) {
+        cJSON *err = cJSON_CreateObject();
+        cJSON_AddBoolToObject(err, "ok", false);
+        cJSON_AddStringToObject(err, "error", "Empty firmware file");
+        return send_json(req, "400 Bad Request", err);
+    }
+
+    esp_err_t err = ota_manager_upload_begin((size_t)req->content_len);
+    if (err != ESP_OK) {
+        cJSON *r = cJSON_CreateObject();
+        cJSON_AddBoolToObject(r, "ok", false);
+        cJSON_AddStringToObject(r, "error", esp_err_to_name(err));
+        return send_json(req, "400 Bad Request", r);
+    }
+
+    char *buf = (char *)malloc(2048);
+    if (!buf) {
+        ota_manager_upload_abort("Out of memory");
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OOM");
+        return ESP_FAIL;
+    }
+
+    int remaining = req->content_len;
+    while (remaining > 0) {
+        int to_read = remaining > 2048 ? 2048 : remaining;
+        int rlen = httpd_req_recv(req, buf, to_read);
+        if (rlen <= 0) {
+            if (rlen == HTTPD_SOCK_ERR_TIMEOUT) {
+                continue;
+            }
+            free(buf);
+            ota_manager_upload_abort("Socket receive error");
+            cJSON *r = cJSON_CreateObject();
+            cJSON_AddBoolToObject(r, "ok", false);
+            cJSON_AddStringToObject(r, "error", "Upload interrupted");
+            return send_json(req, "400 Bad Request", r);
+        }
+        err = ota_manager_upload_write(buf, (size_t)rlen);
+        if (err != ESP_OK) {
+            free(buf);
+            cJSON *r = cJSON_CreateObject();
+            cJSON_AddBoolToObject(r, "ok", false);
+            cJSON_AddStringToObject(r, "error", esp_err_to_name(err));
+            return send_json(req, "400 Bad Request", r);
+        }
+        remaining -= rlen;
+    }
+    free(buf);
+
+    err = ota_manager_upload_finish();
+    if (err != ESP_OK) {
+        cJSON *r = cJSON_CreateObject();
+        cJSON_AddBoolToObject(r, "ok", false);
+        cJSON_AddStringToObject(r, "error", esp_err_to_name(err));
+        return send_json(req, "400 Bad Request", r);
+    }
+
+    gw_ota_info_t info;
+    ota_manager_get_info(&info);
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddBoolToObject(r, "ok", true);
+    cJSON_AddStringToObject(r, "target_partition", info.next_partition);
+    cJSON_AddNumberToObject(r, "bytes", (double)req->content_len);
+    return send_json(req, "200 OK", r);
+}
+
 static esp_err_t handle_factory_reset(httpd_req_t *req)
 {
     if (!is_authenticated(req)) {
@@ -716,7 +852,7 @@ static esp_err_t handle_factory_reset(httpd_req_t *req)
 esp_err_t web_server_start(void)
 {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.max_uri_handlers = 20;
+    config.max_uri_handlers = 24;
     config.stack_size = 8192;
     config.lru_purge_enable = true;
 
@@ -740,6 +876,9 @@ esp_err_t web_server_start(void)
         {.uri = "/api/actions/test-uart", .method = HTTP_POST, .handler = handle_test_uart},
         {.uri = "/api/actions/reboot", .method = HTTP_POST, .handler = handle_reboot},
         {.uri = "/api/actions/factory-reset", .method = HTTP_POST, .handler = handle_factory_reset},
+        {.uri = "/api/ota/status", .method = HTTP_GET, .handler = handle_ota_status},
+        {.uri = "/api/ota/url", .method = HTTP_POST, .handler = handle_ota_url},
+        {.uri = "/api/ota/upload", .method = HTTP_POST, .handler = handle_ota_upload},
     };
 
     for (size_t i = 0; i < sizeof(routes) / sizeof(routes[0]); i++) {
