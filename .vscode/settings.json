@@ -20,7 +20,7 @@
     }
   },
   "idf.currentSetup": "C:\\esp\\v6.1\\esp-idf",
-  "idf.port": "COM45",
+  "idf.port": "COM51",
   "idf.flashType": "UART",
   "idf.openOcdConfigs": [
     "board/esp32c5-lpcore-builtin.cfg"

@@ -400,6 +400,22 @@ static esp_err_t handle_get_config(httpd_req_t *req)
     return send_json(req, "200 OK", r);
 }
 
+static void replace_substr_once(char *buf, size_t buf_sz, const char *old_s, const char *new_s)
+{
+    if (!buf || buf_sz == 0 || !old_s || old_s[0] == '\0' || !new_s) {
+        return;
+    }
+    char *pos = strstr(buf, old_s);
+    if (!pos) {
+        return;
+    }
+    char tmp[128];
+    size_t prefix_len = (size_t)(pos - buf);
+    size_t old_len = strlen(old_s);
+    snprintf(tmp, sizeof(tmp), "%.*s%s%s", (int)prefix_len, buf, new_s, pos + old_len);
+    app_config_safe_copy(buf, buf_sz, tmp);
+}
+
 static void json_copy_str(const cJSON *obj, const char *key, char *dst, size_t dst_sz, bool skip_if_empty)
 {
     const cJSON *item = cJSON_GetObjectItem(obj, key);
@@ -478,6 +494,22 @@ static esp_err_t handle_post_config(httpd_req_t *req)
     if (cJSON_IsNumber((it = cJSON_GetObjectItem(body, "ack_timeout_ms")))) next.ack_timeout_ms = (uint32_t)it->valueint;
     if (cJSON_IsNumber((it = cJSON_GetObjectItem(body, "max_spool_files")))) next.max_spool_files = (uint32_t)it->valueint;
 
+    bool sync_topics = true;
+    if (cJSON_IsBool((it = cJSON_GetObjectItem(body, "sync_device_topics")))) {
+        sync_topics = cJSON_IsTrue(it);
+    }
+    if (sync_topics && strcmp(prev.device_id, next.device_id) != 0) {
+        if (!cJSON_GetObjectItem(body, "mqtt_client_id") &&
+            (strcmp(next.mqtt_client_id, prev.device_id) == 0 || next.mqtt_client_id[0] == '\0')) {
+            app_config_safe_copy(next.mqtt_client_id, sizeof(next.mqtt_client_id), next.device_id);
+        }
+        if (!cJSON_GetObjectItem(body, "topic_hex")) replace_substr_once(next.topic_hex, sizeof(next.topic_hex), prev.device_id, next.device_id);
+        if (!cJSON_GetObjectItem(body, "topic_status")) replace_substr_once(next.topic_status, sizeof(next.topic_status), prev.device_id, next.device_id);
+        if (!cJSON_GetObjectItem(body, "topic_cmd")) replace_substr_once(next.topic_cmd, sizeof(next.topic_cmd), prev.device_id, next.device_id);
+        if (!cJSON_GetObjectItem(body, "topic_debug")) replace_substr_once(next.topic_debug, sizeof(next.topic_debug), prev.device_id, next.device_id);
+        if (!cJSON_GetObjectItem(body, "topic_ack")) replace_substr_once(next.topic_ack, sizeof(next.topic_ack), prev.device_id, next.device_id);
+    }
+
     cJSON_Delete(body);
 
     esp_err_t err = app_config_set(&next);
@@ -500,7 +532,8 @@ static esp_err_t handle_post_config(httpd_req_t *req)
     bool mqtt_changed = (prev.mqtt_enabled != next.mqtt_enabled || strcmp(prev.mqtt_host, next.mqtt_host) != 0 ||
                          prev.mqtt_port != next.mqtt_port || strcmp(prev.mqtt_client_id, next.mqtt_client_id) != 0 ||
                          strcmp(prev.mqtt_user, next.mqtt_user) != 0 || strcmp(prev.mqtt_pass, next.mqtt_pass) != 0 ||
-                         prev.mqtt_keepalive != next.mqtt_keepalive || strcmp(prev.topic_status, next.topic_status) != 0 ||
+                         prev.mqtt_keepalive != next.mqtt_keepalive || strcmp(prev.device_id, next.device_id) != 0 ||
+                         strcmp(prev.topic_hex, next.topic_hex) != 0 || strcmp(prev.topic_status, next.topic_status) != 0 ||
                          strcmp(prev.topic_cmd, next.topic_cmd) != 0 || strcmp(prev.topic_ack, next.topic_ack) != 0);
     if (mqtt_changed) {
         mqtt_manager_reconfigure();

@@ -438,6 +438,10 @@ canvas{image-rendering:pixelated;max-width:100%;border:1px solid var(--border2)}
                 <div class="field"><label>Admin Username</label><input class="input" id="sAdminUser"></div>
                 <div class="field"><label>New Admin Password (blank = keep)</label><input class="input" type="password" id="sAdminPass" placeholder="********"></div>
                 <div class="toggle-row span-2">
+                  <div><span>Auto-Sync MQTT Topics &amp; Client ID on Device ID Change</span><small>Updates factory/inspection/&lt;device_id&gt;/* and reconnects MQTT</small></div>
+                  <input type="checkbox" id="sSyncTopics" checked>
+                </div>
+                <div class="toggle-row span-2">
                   <div><span>Verbose ESP-IDF Debug Logging</span><small>Include detailed driver/network debug logs</small></div>
                   <input type="checkbox" id="sVerbose">
                 </div>
@@ -855,6 +859,7 @@ $('sysForm').addEventListener('submit',async e=>{
     location:$('sLoc').value.trim(),
     admin_user:$('sAdminUser').value.trim(),
     admin_pass:$('sAdminPass').value,
+    sync_device_topics:$('sSyncTopics').checked,
     verbose_debug:$('sVerbose').checked
   },'Device & security settings saved');
 });

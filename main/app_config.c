@@ -2,7 +2,6 @@
 
 #include <stdio.h>
 #include <string.h>
-#include "esp_mac.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "nvs.h"
@@ -42,12 +41,9 @@ static void load_defaults(gw_config_t *cfg)
 {
     memset(cfg, 0, sizeof(*cfg));
 
-    uint8_t mac[6] = {0};
-    esp_read_mac(mac, ESP_MAC_WIFI_STA);
-
-    app_config_safe_copy(cfg->device_name, sizeof(cfg->device_name), "FI-Inspection-Gateway");
-    snprintf(cfg->device_id, sizeof(cfg->device_id), "fi-gw-%02x%02x%02x", mac[3], mac[4], mac[5]);
-    app_config_safe_copy(cfg->location, sizeof(cfg->location), "Inspection-Line-1");
+    app_config_safe_copy(cfg->device_name, sizeof(cfg->device_name), "FI-Inspection-Gateway-P2");
+    app_config_safe_copy(cfg->device_id, sizeof(cfg->device_id), "fi-gw-pilot2");
+    app_config_safe_copy(cfg->location, sizeof(cfg->location), "Inspection-Line-2");
 
     app_config_safe_copy(cfg->admin_user, sizeof(cfg->admin_user), "admin");
     app_config_safe_copy(cfg->admin_pass, sizeof(cfg->admin_pass), "admin1234");
@@ -55,7 +51,7 @@ static void load_defaults(gw_config_t *cfg)
     cfg->wifi_mode = GW_WIFI_AP_STA;
     app_config_safe_copy(cfg->sta_ssid, sizeof(cfg->sta_ssid), "");
     app_config_safe_copy(cfg->sta_pass, sizeof(cfg->sta_pass), "");
-    snprintf(cfg->ap_ssid, sizeof(cfg->ap_ssid), "FI-GW-%02X%02X%02X", mac[3], mac[4], mac[5]);
+    app_config_safe_copy(cfg->ap_ssid, sizeof(cfg->ap_ssid), "FI-GW-PILOT2");
     app_config_safe_copy(cfg->ap_pass, sizeof(cfg->ap_pass), "gateway1234");
 
     cfg->uart_baud = 9600;
@@ -73,7 +69,7 @@ static void load_defaults(gw_config_t *cfg)
     cfg->mqtt_enabled = false;
     app_config_safe_copy(cfg->mqtt_host, sizeof(cfg->mqtt_host), "192.168.1.100");
     cfg->mqtt_port = 1883;
-    snprintf(cfg->mqtt_client_id, sizeof(cfg->mqtt_client_id), "fi-gw-%02x%02x%02x", mac[3], mac[4], mac[5]);
+    app_config_safe_copy(cfg->mqtt_client_id, sizeof(cfg->mqtt_client_id), cfg->device_id);
     app_config_safe_copy(cfg->mqtt_user, sizeof(cfg->mqtt_user), "");
     app_config_safe_copy(cfg->mqtt_pass, sizeof(cfg->mqtt_pass), "");
     cfg->mqtt_keepalive = 60;
