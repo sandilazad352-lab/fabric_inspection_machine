@@ -55,8 +55,8 @@ static void load_defaults(gw_config_t *cfg)
     app_config_safe_copy(cfg->ap_pass, sizeof(cfg->ap_pass), "gateway1234");
 
     cfg->uart_baud = 9600;
-    cfg->uart_tx_pin = 4;
-    cfg->uart_rx_pin = 5;
+    cfg->uart_tx_pin = 5;
+    cfg->uart_rx_pin = 4;
     cfg->uart_data_bits = 8;
     cfg->uart_parity = 0;
     cfg->uart_stop_bits = 1;
@@ -98,7 +98,7 @@ static void clamp_config(gw_config_t *cfg)
         cfg->uart_baud = 9600;
     }
     if (cfg->uart_tx_pin < 0 || cfg->uart_tx_pin > 28) {
-        cfg->uart_tx_pin = 4;
+        cfg->uart_tx_pin = 5;
     }
     if (cfg->uart_rx_pin < 0 || cfg->uart_rx_pin > 28 || cfg->uart_rx_pin == cfg->uart_tx_pin) {
         cfg->uart_rx_pin = (cfg->uart_tx_pin == 5) ? 4 : 5;
@@ -196,6 +196,7 @@ esp_err_t app_config_init(void)
                 v1_blob.magic == CONFIG_MAGIC &&
                 v1_blob.version == 1) {
                 s_cfg = v1_blob.cfg;
+                snprintf(s_cfg.topic_ack, sizeof(s_cfg.topic_ack), "factory/inspection/%s/ack", s_cfg.device_id);
                 clamp_config(&s_cfg);
                 save_to_nvs_locked(&s_cfg);
             }

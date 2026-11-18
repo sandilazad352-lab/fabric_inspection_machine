@@ -23,6 +23,8 @@ static const char *TAG = "mqtt_mgr";
 
 static SemaphoreHandle_t s_mqtt_mutex = NULL;
 static esp_mqtt_client_handle_t s_client = NULL;
+static TaskHandle_t s_hb_task = NULL;
+static volatile bool s_reconn_requested = false;
 static bool s_connected = false;
 static bool s_ever_connected = false;
 static char s_broker_uri[128];
@@ -222,8 +224,10 @@ static void ip_got_event_handler(void *arg, esp_event_base_t base, int32_t id, v
     (void)id;
     (void)data;
     if (!s_connected) {
-        ESP_LOGI(TAG, "Network IP ready; starting/reconnecting MQTT");
-        mqtt_manager_reconfigure();
+        s_reconn_requested = true;
+        if (s_hb_task) {
+            xTaskNotifyGive(s_hb_task);
+        }
     }
 }
 
@@ -231,7 +235,13 @@ static void heartbeat_task(void *arg)
 {
     (void)arg;
     while (1) {
-        vTaskDelay(pdMS_TO_TICKS(30000));
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(30000));
+        if (s_reconn_requested) {
+            s_reconn_requested = false;
+            ESP_LOGI(TAG, "Network IP ready; starting/reconnecting MQTT");
+            mqtt_manager_reconfigure();
+            continue;
+        }
         if (s_connected) {
             mqtt_manager_publish_status("online");
         }
@@ -329,7 +339,7 @@ esp_err_t mqtt_manager_init(void)
         s_mqtt_mutex = xSemaphoreCreateMutex();
     }
     ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, ip_got_event_handler, NULL, NULL));
-    xTaskCreate(heartbeat_task, "mqtt_hb", 3584, NULL, 4, NULL);
+    xTaskCreate(heartbeat_task, "mqtt_hb", 4608, NULL, 4, &s_hb_task);
     return mqtt_manager_reconfigure();
 }
 

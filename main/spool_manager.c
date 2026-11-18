@@ -381,7 +381,7 @@ static void sync_task(void *arg)
     }
 
     while (1) {
-        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(2000));
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(5000));
 
         while (1) {
             app_config_get(cfg);
@@ -574,6 +574,7 @@ esp_err_t spool_manager_init(void)
         .format_if_mount_failed = true,
     };
 
+    ESP_LOGI(TAG, "Mounting SPIFFS spool partition...");
     esp_err_t err = esp_vfs_spiffs_register(&conf);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to mount SPIFFS spool (%s)", esp_err_to_name(err));
